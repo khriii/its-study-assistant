@@ -3,7 +3,16 @@ import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
-const app = initializeApp(firebaseConfig);
+// Use the project's canonical Firebase Auth domain. The GitHub Pages host is
+// the app's continue URL; it must be authorized separately in Firebase Console.
+// Keeping the auth handler on the project's firebaseapp.com domain avoids
+// accidentally using an incorrect authDomain from the generated config.
+const firebaseAppConfig = {
+  ...firebaseConfig,
+  authDomain: `${firebaseConfig.projectId}.firebaseapp.com`,
+};
+
+const app = initializeApp(firebaseAppConfig);
 
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
