@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ITS Universal Study Assistant</title>
+    <meta name="description" content="Workspace di studio modulare e responsive per studenti ITS con appunti rich-text, slide viewer, flashcard, quiz interattivi, cloud sync Firebase e Tutor AI." />
+    <meta property="og:title" content="ITS Universal Study Assistant" />
+    <meta property="og:description" content="Workspace di studio modulare e responsive per studenti ITS con appunti rich-text, slide viewer, flashcard, quiz interattivi, cloud sync Firebase e Tutor AI." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <script>
+      (function () {
+        var saved = localStorage.getItem('its_theme_mode') || 'system';
+        if (saved === 'dark' || (saved === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      })();
+    </script>
+  </head>
+  <body class="bg-slate-50 dark:bg-[#1e1e1e] text-slate-800 dark:text-[#cccccc] antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

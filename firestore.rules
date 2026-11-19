@@ -1,0 +1,353 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: default deny everything
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HELPERS ---
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerified() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function subjectExists(userId, subjectId) {
+      return existsAfter(/databases/$(database)/documents/users/$(userId)/subjects/$(subjectId));
+    }
+
+    function folderExists(userId, folderId) {
+      return existsAfter(/databases/$(database)/documents/users/$(userId)/folders/$(folderId));
+    }
+
+    function noteExists(userId, noteId) {
+      return existsAfter(/databases/$(database)/documents/users/$(userId)/notes/$(noteId));
+    }
+
+    function studyFileExists(userId, fileId) {
+      return existsAfter(/databases/$(database)/documents/users/$(userId)/studyFiles/$(fileId));
+    }
+
+    // --- ENTITY VALIDATION BLUEPRINTS ---
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'photoURL', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid == userId && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.photoURL is string && data.photoURL.size() <= 500
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPreferences(data, userId) {
+      return data.keys().hasAll(['userId', 'themeMode', 'geminiModel', 'currentSubjectId', 'activeNoteId', 'openTabs', 'windowVisibility', 'panelWidths', 'panelOrder', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'themeMode', 'geminiModel', 'currentSubjectId', 'activeNoteId', 'openTabs', 'windowVisibility', 'panelWidths', 'panelOrder', 'updatedAt'])
+        && data.userId is string && data.userId == userId
+        && data.themeMode in ['light', 'dark', 'system']
+        && data.geminiModel in ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']
+        && (data.currentSubjectId == null || (data.currentSubjectId is string && data.currentSubjectId.size() <= 128))
+        && (data.activeNoteId == null || (data.activeNoteId is string && data.activeNoteId.size() <= 128))
+        && data.openTabs is list && data.openTabs.size() <= 50
+        && (data.openTabs.size() == 0 || data.openTabs[0] is string)
+        && data.windowVisibility is map
+        && data.windowVisibility.keys().hasOnly(['sidebar', 'pdf-viewer-panel', 'left-panel', 'flashcards-panel', 'quiz-panel', 'right-panel'])
+        && data.panelWidths is map
+        && data.panelWidths.keys().hasOnly(['sidebar', 'pdf-viewer-panel', 'flashcards-panel', 'quiz-panel', 'right-panel'])
+        && data.panelOrder is list && data.panelOrder.size() == 6 && data.panelOrder[0] is string
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSubject(data, subjectId, userId) {
+      return data.keys().hasAll(['id', 'userId', 'name', 'color', 'systemPrompt', 'order', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'name', 'color', 'systemPrompt', 'order', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id == subjectId && isValidId(data.id)
+        && data.userId is string && data.userId == userId
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && data.color is string && data.color.size() == 7 && data.color.matches('^#[0-9a-fA-F]{6}$')
+        && data.systemPrompt is string && data.systemPrompt.size() <= 2000
+        && data.order is number && data.order >= 0 && data.order <= 100000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFolder(data, folderId, userId) {
+      return data.keys().hasAll(['id', 'userId', 'subjectId', 'name', 'isOpen', 'order', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'subjectId', 'name', 'isOpen', 'order', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id == folderId && isValidId(data.id)
+        && data.userId is string && data.userId == userId
+        && isValidId(data.subjectId)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.isOpen is bool
+        && data.order is number && data.order >= 0 && data.order <= 100000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNote(data, noteId, userId) {
+      return data.keys().hasAll(['id', 'userId', 'subjectId', 'folderId', 'title', 'content', 'order', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'subjectId', 'folderId', 'title', 'content', 'order', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id == noteId && isValidId(data.id)
+        && data.userId is string && data.userId == userId
+        && isValidId(data.subjectId)
+        && (data.folderId == null || isValidId(data.folderId))
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.content is string && data.content.size() <= 450000
+        && data.order is number && data.order >= 0 && data.order <= 100000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFlashcard(data, cardId, userId) {
+      return data.keys().hasAll(['id', 'userId', 'subjectId', 'noteId', 'question', 'answer', 'order', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'subjectId', 'noteId', 'question', 'answer', 'order', 'createdAt'])
+        && data.id is string && data.id == cardId && isValidId(data.id)
+        && data.userId is string && data.userId == userId
+        && isValidId(data.subjectId)
+        && isValidId(data.noteId)
+        && data.question is string && data.question.size() >= 1 && data.question.size() <= 1000
+        && data.answer is string && data.answer.size() >= 1 && data.answer.size() <= 2000
+        && data.order is number && data.order >= 0 && data.order <= 100000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidQuiz(data, quizId, userId) {
+      return data.keys().hasAll(['id', 'userId', 'subjectId', 'noteId', 'noteTitle', 'status', 'questions', 'userAnswers', 'score', 'total', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'subjectId', 'noteId', 'noteTitle', 'status', 'questions', 'userAnswers', 'score', 'total', 'createdAt', 'updatedAt', 'completedAt'])
+        && data.id is string && data.id == quizId && isValidId(data.id)
+        && data.userId is string && data.userId == userId
+        && isValidId(data.subjectId)
+        && isValidId(data.noteId)
+        && data.noteTitle is string && data.noteTitle.size() >= 1 && data.noteTitle.size() <= 160
+        && data.status in ['active', 'completed']
+        && data.questions is list && data.questions.size() >= 1 && data.questions.size() <= 20
+        && data.questions[0] is map
+        && data.userAnswers is map && data.userAnswers.size() <= 20
+        && data.score is int && data.score >= 0 && data.score <= data.total
+        && data.total is int && data.total == data.questions.size()
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && (!('completedAt' in data) || data.completedAt == null || data.completedAt is timestamp);
+    }
+
+    function isValidStudyFile(data, fileId, userId) {
+      return data.keys().hasAll(['id', 'userId', 'subjectId', 'folderId', 'name', 'mimeType', 'fileExt', 'size', 'totalChunks', 'extractedText', 'order', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'subjectId', 'folderId', 'name', 'mimeType', 'fileExt', 'size', 'totalChunks', 'extractedText', 'order', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id == fileId && isValidId(data.id)
+        && data.userId is string && data.userId == userId
+        && isValidId(data.subjectId)
+        && (data.folderId == null || isValidId(data.folderId))
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 180
+        && data.mimeType is string && data.mimeType.size() >= 1 && data.mimeType.size() <= 160
+        && data.fileExt in ['pdf', 'docx', 'pptx']
+        && data.size is int && data.size >= 0 && data.size <= 7000000
+        && data.totalChunks is int && data.totalChunks >= 1 && data.totalChunks <= 20
+        && data.extractedText is string && data.extractedText.size() <= 200000
+        && data.order is number && data.order >= 0 && data.order <= 100000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFileChunk(data, chunkId, userId) {
+      return data.keys().hasAll(['id', 'userId', 'fileId', 'index', 'data'])
+        && data.keys().hasOnly(['id', 'userId', 'fileId', 'index', 'data'])
+        && data.id is string && data.id == chunkId && isValidId(data.id)
+        && data.userId is string && data.userId == userId
+        && isValidId(data.fileId)
+        && data.index is int && data.index >= 0 && data.index <= 20
+        && data.data is string && data.data.size() >= 1 && data.data.size() <= 600000;
+    }
+
+    // --- USER PROFILE & PRIVATE WORKSPACE ---
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isValidId(userId) && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'updatedAt']);
+      allow delete: if isValidId(userId) && isOwner(userId);
+
+      // Preferences (single doc 'workspace')
+      match /preferences/{prefId} {
+        allow get: if isValidId(userId) && isValidId(prefId) && prefId == 'workspace' && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(prefId) && prefId == 'workspace' && isOwner(userId)
+          && isValidPreferences(incoming(), userId)
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId) && isValidId(prefId) && prefId == 'workspace' && isOwner(userId)
+          && isValidPreferences(incoming(), userId)
+          && incoming().userId == existing().userId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['themeMode', 'geminiModel', 'currentSubjectId', 'activeNoteId', 'openTabs', 'windowVisibility', 'panelWidths', 'panelOrder', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(prefId) && isOwner(userId);
+      }
+
+      // Subjects
+      match /subjects/{subjectId} {
+        allow get: if isValidId(userId) && isValidId(subjectId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(subjectId) && isOwner(userId)
+          && isValidSubject(incoming(), subjectId, userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId) && isValidId(subjectId) && isOwner(userId)
+          && isValidSubject(incoming(), subjectId, userId)
+          && incoming().id == existing().id
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'color', 'systemPrompt', 'order', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(subjectId) && isOwner(userId);
+      }
+
+      // Folders
+      match /folders/{folderId} {
+        allow get: if isValidId(userId) && isValidId(folderId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(folderId) && isOwner(userId)
+          && isValidFolder(incoming(), folderId, userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && subjectExists(userId, incoming().subjectId);
+        allow update: if isValidId(userId) && isValidId(folderId) && isOwner(userId)
+          && isValidFolder(incoming(), folderId, userId)
+          && incoming().id == existing().id
+          && incoming().userId == existing().userId
+          && incoming().subjectId == existing().subjectId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'isOpen', 'order', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(folderId) && isOwner(userId);
+      }
+
+      // Notes
+      match /notes/{noteId} {
+        allow get: if isValidId(userId) && isValidId(noteId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(noteId) && isOwner(userId)
+          && isValidNote(incoming(), noteId, userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && subjectExists(userId, incoming().subjectId)
+          && (incoming().folderId == null || folderExists(userId, incoming().folderId));
+        allow update: if isValidId(userId) && isValidId(noteId) && isOwner(userId)
+          && isValidNote(incoming(), noteId, userId)
+          && incoming().id == existing().id
+          && incoming().userId == existing().userId
+          && incoming().subjectId == existing().subjectId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (incoming().folderId == null || folderExists(userId, incoming().folderId))
+          && incoming().diff(existing()).affectedKeys().hasOnly(['folderId', 'title', 'content', 'order', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(noteId) && isOwner(userId);
+      }
+
+      // Flashcards
+      match /flashcards/{cardId} {
+        allow get: if isValidId(userId) && isValidId(cardId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(cardId) && isOwner(userId)
+          && isValidFlashcard(incoming(), cardId, userId)
+          && incoming().createdAt == request.time
+          && subjectExists(userId, incoming().subjectId)
+          && noteExists(userId, incoming().noteId);
+        allow update: if false;
+        allow delete: if isValidId(userId) && isValidId(cardId) && isOwner(userId);
+      }
+
+      // Quizzes (Active + Terminal Completed History)
+      match /quizzes/{quizId} {
+        allow get: if isValidId(userId) && isValidId(quizId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(quizId) && isOwner(userId)
+          && isValidQuiz(incoming(), quizId, userId)
+          && (incoming().status == 'active' || (incoming().status == 'completed' && incoming().completedAt == request.time))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && subjectExists(userId, incoming().subjectId)
+          && noteExists(userId, incoming().noteId);
+        allow update: if isValidId(userId) && isValidId(quizId) && isOwner(userId)
+          && isValidQuiz(incoming(), quizId, userId)
+          && existing().status == 'active'
+          && incoming().id == existing().id
+          && incoming().userId == existing().userId
+          && incoming().subjectId == existing().subjectId
+          && incoming().noteId == existing().noteId
+          && incoming().questions == existing().questions
+          && incoming().total == existing().total
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            (incoming().status == 'active' && incoming().diff(existing()).affectedKeys().hasOnly(['userAnswers', 'updatedAt'])) ||
+            (incoming().status == 'completed' && incoming().completedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'userAnswers', 'score', 'completedAt', 'updatedAt']))
+          );
+        allow delete: if isValidId(userId) && isValidId(quizId) && isOwner(userId);
+      }
+
+      // Uploaded Study Files (.pdf, .docx, .pptx)
+      match /studyFiles/{fileId} {
+        allow get: if isValidId(userId) && isValidId(fileId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(fileId) && isOwner(userId)
+          && isValidStudyFile(incoming(), fileId, userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && subjectExists(userId, incoming().subjectId)
+          && (incoming().folderId == null || folderExists(userId, incoming().folderId));
+        allow update: if isValidId(userId) && isValidId(fileId) && isOwner(userId)
+          && isValidStudyFile(incoming(), fileId, userId)
+          && incoming().id == existing().id
+          && incoming().userId == existing().userId
+          && incoming().subjectId == existing().subjectId
+          && incoming().mimeType == existing().mimeType
+          && incoming().fileExt == existing().fileExt
+          && incoming().size == existing().size
+          && incoming().totalChunks == existing().totalChunks
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (incoming().folderId == null || folderExists(userId, incoming().folderId))
+          && incoming().diff(existing()).affectedKeys().hasOnly(['folderId', 'name', 'order', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(fileId) && isOwner(userId);
+      }
+
+      // Base64 File Chunks
+      match /fileChunks/{chunkId} {
+        allow get: if isValidId(userId) && isValidId(chunkId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(chunkId) && isOwner(userId)
+          && isValidFileChunk(incoming(), chunkId, userId)
+          && studyFileExists(userId, incoming().fileId);
+        allow update: if false;
+        allow delete: if isValidId(userId) && isValidId(chunkId) && isOwner(userId);
+      }
+    }
+  }
+}
