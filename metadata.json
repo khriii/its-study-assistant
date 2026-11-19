@@ -2,5 +2,7 @@
   "name": "ITS Universal Study Assistant",
   "description": "Workspace di studio modulare e responsive per studenti ITS con appunti rich-text, slide viewer, flashcard, quiz interattivi, cloud sync Firebase e Tutor AI.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
