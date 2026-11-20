@@ -384,6 +384,9 @@ export default function App() {
             studyDifficulty={store.studyDifficulty}
             aiResponseLanguage={store.aiResponseLanguage}
             cards={store.activeNoteFlashcards}
+            aiAccessStatus={store.aiAccessStatus}
+            onRequestAiAccess={store.requestAiAccess}
+            onRefreshAiAccess={store.refreshAiAccess}
             onAddCards={store.addFlashcardsBatch}
             onDeleteCard={(cardId) => void store.deleteFlashcard(cardId)}
             onToast={store.showToast}
@@ -403,6 +406,9 @@ export default function App() {
             activeQuiz={store.activeQuiz}
             quizHistory={store.quizHistory}
             generateTriggerToken={quizTriggerToken}
+            aiAccessStatus={store.aiAccessStatus}
+            onRequestAiAccess={store.requestAiAccess}
+            onRefreshAiAccess={store.refreshAiAccess}
             onCreateQuiz={store.createActiveQuiz}
             onSelectAnswer={(quiz, qIdx, optIdx) =>
               void store.selectQuizAnswer(quiz, qIdx, optIdx)
@@ -426,6 +432,9 @@ export default function App() {
             aiResponseStyle={store.aiResponseStyle}
             aiResponseLanguage={store.aiResponseLanguage}
             externalPrompt={externalAiPrompt}
+            aiAccessStatus={store.aiAccessStatus}
+            onRequestAiAccess={store.requestAiAccess}
+            onRefreshAiAccess={store.refreshAiAccess}
             onToast={store.showToast}
             {...dragProps}
           />
@@ -633,6 +642,8 @@ export default function App() {
           editorFontSize: store.editorFontSize,
           editorLineHeight: store.editorLineHeight,
         }}
+        aiAccessStatus={store.aiAccessStatus}
+        onToast={store.showToast}
         onClose={() => setSettingsOpen(false)}
         onSave={store.saveWorkspaceSettings}
       />

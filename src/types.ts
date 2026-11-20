@@ -149,3 +149,45 @@ export interface ToastItem {
   message: string;
   type: 'success' | 'error' | 'info';
 }
+
+export interface AiAccessStatus {
+  email: string;
+  displayName: string;
+  authorized: boolean;
+  isAdmin: boolean;
+  adminEmail: string;
+  pending: boolean;
+  rejected: boolean;
+  smtpConfigured: boolean;
+  rateLimitPerMin: number;
+}
+
+export interface AiPendingRequest {
+  email: string;
+  uid: string;
+  displayName: string;
+  note: string;
+  requestedAt: string;
+  lastEmailSentAt?: string;
+}
+
+export interface AiAdminAccessOverview {
+  adminEmail: string;
+  smtpConfigured: boolean;
+  rateLimitPerMin: number;
+  envAllowedEmails: string[];
+  approvedEmails: string[];
+  rejectedEmails: string[];
+  pendingRequests: AiPendingRequest[];
+  suggestedAllowedEnv: string;
+}
+
+export interface AiAccessRequestResult {
+  ok: boolean;
+  authorized: boolean;
+  pending: boolean;
+  emailSent: boolean;
+  reason?: string;
+  mailtoUrl?: string;
+}
+

@@ -128,7 +128,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
               ITS Study Assistant
             </span>
             <span className="text-[10px] font-mono font-medium text-slate-400 dark:text-vscode-textMuted leading-none mt-0.5">
-              v1.0.1
+              v1.0.2
             </span>
           </div>
         </div>

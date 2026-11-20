@@ -16,14 +16,22 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { getAiEndpoint, parseAiJsonResponse } from '../utils/aiApi';
+import {
+  AiApiError,
+  getAiEndpoint,
+  getFirebaseAuthHeaders,
+  parseAiJsonResponse,
+} from '../utils/aiApi';
 import {
   base64ToUint8Array,
   extractDocumentPreview,
   getStudyFileExt,
 } from '../utils/documentParser';
 import { readAttachmentFile, stripHtml } from '../utils/exporters';
+import { AiAccessGateCard } from './AiAccessGateCard';
 import type {
+  AiAccessRequestResult,
+  AiAccessStatus,
   AiResponseLanguage,
   AiResponseStyle,
   ChatAttachment,
@@ -50,6 +58,9 @@ interface AiChatPanelProps {
   aiResponseStyle: AiResponseStyle;
   aiResponseLanguage: AiResponseLanguage;
   externalPrompt: ExternalAiPrompt | null;
+  aiAccessStatus: AiAccessStatus | null;
+  onRequestAiAccess: (note?: string) => Promise<AiAccessRequestResult>;
+  onRefreshAiAccess: () => Promise<void>;
   onToast: (message: string, type?: 'success' | 'error' | 'info') => void;
   onHeaderDragStart?: (e: React.DragEvent) => void;
   onHeaderDragEnd?: () => void;
@@ -65,6 +76,9 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
   aiResponseStyle,
   aiResponseLanguage,
   externalPrompt,
+  aiAccessStatus,
+  onRequestAiAccess,
+  onRefreshAiAccess,
   onToast,
   onHeaderDragStart,
   onHeaderDragEnd,
@@ -99,9 +113,15 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
     }
   }, [messages, sending]);
 
+  const isAiBlocked = Boolean(aiAccessStatus && !aiAccessStatus.authorized);
+
   const sendMessage = useCallback(
     async (promptText: string, displayLabel: string, files: ChatAttachment[] = []) => {
       if (sending) return;
+      if (isAiBlocked) {
+        onToast('Richiedi prima l\'approvazione per usare Gemini AI.', 'info');
+        return;
+      }
       const parts: Record<string, unknown>[] = [];
       if (promptText.trim()) {
         parts.push({ text: promptText });
@@ -147,9 +167,10 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
           currentSubject?.systemPrompt ||
           `Sei un tutor AI didattico per studenti ITS nella materia ${subjectName}. Rispondi in italiano in modo chiaro, strutturato e preciso.`;
 
+        const headers = await getFirebaseAuthHeaders({ 'Content-Type': 'application/json' });
         const res = await fetch(getAiEndpoint('/api/ai/chat'), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             model: geminiModel,
             systemInstruction,
@@ -158,7 +179,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
             contents: nextHistory,
           }),
         });
-        const data = await parseAiJsonResponse<{ text?: string; error?: string }>(
+        const data = await parseAiJsonResponse<{ text?: string; error?: string; code?: string }>(
           res,
           '/api/ai/chat',
         );
@@ -178,6 +199,9 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
           },
         ]);
       } catch (err: unknown) {
+        if (err instanceof AiApiError && (err.status === 403 || err.code === 'AI_ACCESS_REQUIRED')) {
+          void onRefreshAiAccess();
+        }
         const msg = err instanceof Error ? err.message : 'Errore connessione AI.';
         setMessages((prev) => [
           ...prev,
@@ -191,7 +215,16 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
         setSending(false);
       }
     },
-    [sending, currentSubject, geminiModel, aiResponseStyle, aiResponseLanguage],
+    [
+      sending,
+      isAiBlocked,
+      currentSubject,
+      geminiModel,
+      aiResponseStyle,
+      aiResponseLanguage,
+      onRefreshAiAccess,
+      onToast,
+    ],
   );
 
   // Triggered from selection modal / command palette
@@ -449,24 +482,27 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
       <div className="p-2 border-b border-slate-200 dark:border-vscode-border bg-slate-100 dark:bg-vscode-tabInactive flex items-center gap-1.5 overflow-x-auto hide-scrollbar flex-none">
         <button
           type="button"
+          disabled={isAiBlocked}
           onClick={() => handleQuickAction('summarize')}
-          className="px-2.5 py-1.5 bg-white dark:bg-vscode-input accent-hover-soft text-slate-700 dark:text-vscode-text border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap transition shadow-xs cursor-pointer"
+          className="px-2.5 py-1.5 bg-white dark:bg-vscode-input accent-hover-soft text-slate-700 dark:text-vscode-text border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           <AlignLeft className="w-3 h-3 accent-icon" />
           <span>Riassumi</span>
         </button>
         <button
           type="button"
+          disabled={isAiBlocked}
           onClick={() => handleQuickAction('explain')}
-          className="px-2.5 py-1.5 bg-white dark:bg-vscode-input hover:bg-purple-50 dark:hover:bg-vscode-hover text-slate-700 dark:text-vscode-text border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap transition shadow-xs cursor-pointer"
+          className="px-2.5 py-1.5 bg-white dark:bg-vscode-input hover:bg-purple-50 dark:hover:bg-vscode-hover text-slate-700 dark:text-vscode-text border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           <Lightbulb className="w-3 h-3 text-purple-500" />
           <span>Spiega Concetti</span>
         </button>
         <button
           type="button"
+          disabled={isAiBlocked}
           onClick={() => handleQuickAction('quiz')}
-          className="px-2.5 py-1.5 bg-white dark:bg-vscode-input hover:bg-emerald-50 dark:hover:bg-vscode-hover text-slate-700 dark:text-vscode-text border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap transition shadow-xs cursor-pointer"
+          className="px-2.5 py-1.5 bg-white dark:bg-vscode-input hover:bg-emerald-50 dark:hover:bg-vscode-hover text-slate-700 dark:text-vscode-text border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           <HelpCircle className="w-3 h-3 text-emerald-500" />
           <span>Mini-Quiz</span>
@@ -478,20 +514,29 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
         ref={feedRef}
         className="flex-1 overflow-y-auto p-3 space-y-3 bg-slate-200/50 dark:bg-[#141414]"
       >
-        {/* Welcome Bubble */}
-        <div className="flex items-start gap-2.5">
-          <div
-            style={{ backgroundColor: 'var(--primary-600)' }}
-            className="w-7 h-7 rounded-lg text-white flex items-center justify-center flex-none shadow-xs"
-          >
-            <Bot className="w-3.5 h-3.5" />
+        {isAiBlocked && aiAccessStatus ? (
+          <AiAccessGateCard
+            accessStatus={aiAccessStatus}
+            onRequestAccess={onRequestAiAccess}
+            onRefreshStatus={onRefreshAiAccess}
+            onToast={onToast}
+          />
+        ) : (
+          /* Welcome Bubble */
+          <div className="flex items-start gap-2.5">
+            <div
+              style={{ backgroundColor: 'var(--primary-600)' }}
+              className="w-7 h-7 rounded-lg text-white flex items-center justify-center flex-none shadow-xs"
+            >
+              <Bot className="w-3.5 h-3.5" />
+            </div>
+            <div className="bg-white dark:bg-vscode-sidebar border border-slate-200 dark:border-vscode-borderLight rounded-2xl rounded-tl-xs p-3 text-xs text-slate-700 dark:text-vscode-text shadow-xs leading-relaxed">
+              Ciao! Sono il tuo <strong>Tutor AI ITS</strong> per{' '}
+              <strong>{currentSubject?.name || 'il tuo corso'}</strong>.<br />
+              Trascina qui una nota o un file dall&apos;Explorer per analizzarlo insieme, oppure usa le azioni rapide.
+            </div>
           </div>
-          <div className="bg-white dark:bg-vscode-sidebar border border-slate-200 dark:border-vscode-borderLight rounded-2xl rounded-tl-xs p-3 text-xs text-slate-700 dark:text-vscode-text shadow-xs leading-relaxed">
-            Ciao! Sono il tuo <strong>Tutor AI ITS</strong> per{' '}
-            <strong>{currentSubject?.name || 'il tuo corso'}</strong>.<br />
-            Trascina qui una nota o un file dall&apos;Explorer per analizzarlo insieme, oppure usa le azioni rapide.
-          </div>
-        </div>
+        )}
 
         {messages.map((msg) => {
           if (msg.role === 'user') {
@@ -626,6 +671,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
           <textarea
             ref={textareaRef}
             rows={1}
+            disabled={isAiBlocked}
             value={inputText}
             onChange={(e) => {
               setInputText(e.target.value);
@@ -639,14 +685,16 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
               }
             }}
             onPaste={(e) => void handlePaste(e)}
-            placeholder="Chiedi all'AI"
+            placeholder={isAiBlocked ? 'Richiedi approvazione AI per chattare...' : "Chiedi all'AI"}
             style={{ minHeight: '40px' }}
-            className="flex-1 border border-slate-300 dark:border-vscode-borderLight bg-white dark:bg-vscode-input text-slate-800 dark:text-vscode-textBright rounded-lg px-3.5 py-2.5 text-sm focus:outline-none accent-focus-ring transition min-w-0 resize-none overflow-y-auto max-h-32 hide-scrollbar"
+            className="flex-1 border border-slate-300 dark:border-vscode-borderLight bg-white dark:bg-vscode-input text-slate-800 dark:text-vscode-textBright rounded-lg px-3.5 py-2.5 text-sm focus:outline-none accent-focus-ring transition min-w-0 resize-none overflow-y-auto max-h-32 hide-scrollbar disabled:opacity-60"
           />
 
           <button
             type="submit"
-            disabled={sending || attachingDrop || (!inputText.trim() && attachments.length === 0)}
+            disabled={
+              isAiBlocked || sending || attachingDrop || (!inputText.trim() && attachments.length === 0)
+            }
             className="accent-btn rounded-lg w-10 h-10 flex-none flex items-center justify-center transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             title="Invia messaggio (Invio)"
           >

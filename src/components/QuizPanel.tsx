@@ -13,9 +13,17 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { getAiEndpoint, parseAiJsonResponse } from '../utils/aiApi';
+import {
+  AiApiError,
+  getAiEndpoint,
+  getFirebaseAuthHeaders,
+  parseAiJsonResponse,
+} from '../utils/aiApi';
 import { stripHtml } from '../utils/exporters';
+import { AiAccessGateCard } from './AiAccessGateCard';
 import type {
+  AiAccessRequestResult,
+  AiAccessStatus,
   AiResponseLanguage,
   GeminiModelId,
   Note,
@@ -35,6 +43,9 @@ interface QuizPanelProps {
   activeQuiz: Quiz | null;
   quizHistory: Quiz[];
   generateTriggerToken: number;
+  aiAccessStatus: AiAccessStatus | null;
+  onRequestAiAccess: (note?: string) => Promise<AiAccessRequestResult>;
+  onRefreshAiAccess: () => Promise<void>;
   onCreateQuiz: (note: Note, questions: QuizQuestion[]) => Promise<void>;
   onSelectAnswer: (quiz: Quiz, qIndex: number, optionIndex: number) => void;
   onSubmitQuiz: (quiz: Quiz) => Promise<void>;
@@ -58,6 +69,9 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
   activeQuiz,
   quizHistory,
   generateTriggerToken,
+  aiAccessStatus,
+  onRequestAiAccess,
+  onRefreshAiAccess,
   onCreateQuiz,
   onSelectAnswer,
   onSubmitQuiz,
@@ -71,6 +85,7 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [questionCount, setQuestionCount] = useState<number>(defaultQuizCount);
   const [generating, setGenerating] = useState(false);
+  const isAiBlocked = Boolean(aiAccessStatus && !aiAccessStatus.authorized);
 
   useEffect(() => {
     setQuestionCount(defaultQuizCount);
@@ -81,6 +96,10 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
   }, [activeNote?.id]);
 
   const handleGenerateQuiz = async () => {
+    if (isAiBlocked) {
+      onToast('Richiedi prima l\'approvazione per usare Gemini AI.', 'info');
+      return;
+    }
     const noteText = activeNote ? stripHtml(activeNote.content).trim() : '';
     if (!activeNote || !noteText) {
       onToast('Apri o scrivi una nota prima di generare un quiz.', 'info');
@@ -94,9 +113,10 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
     setGenerating(true);
 
     try {
+      const headers = await getFirebaseAuthHeaders({ 'Content-Type': 'application/json' });
       const res = await fetch(getAiEndpoint('/api/ai/quiz'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           model: geminiModel,
           noteText,
@@ -106,10 +126,11 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
           responseLanguage: aiResponseLanguage,
         }),
       });
-      const data = await parseAiJsonResponse<{ questions?: QuizQuestion[]; error?: string }>(
-        res,
-        '/api/ai/quiz',
-      );
+      const data = await parseAiJsonResponse<{
+        questions?: QuizQuestion[];
+        error?: string;
+        code?: string;
+      }>(res, '/api/ai/quiz');
       if (!Array.isArray(data.questions) || data.questions.length === 0) {
         throw new Error('Formato domande non valido.');
       }
@@ -117,6 +138,9 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
       await onCreateQuiz(activeNote, data.questions);
       onToast(`Quiz creato con ${data.questions.length} domande!`, 'success');
     } catch (err: unknown) {
+      if (err instanceof AiApiError && (err.status === 403 || err.code === 'AI_ACCESS_REQUIRED')) {
+        void onRefreshAiAccess();
+      }
       const msg = err instanceof Error ? err.message : 'Errore creazione quiz.';
       onToast(`Errore creazione quiz: ${msg}`, 'error');
     } finally {
@@ -374,9 +398,9 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
           />
           <button
             type="button"
-            disabled={generating}
+            disabled={generating || isAiBlocked}
             onClick={() => void handleGenerateQuiz()}
-            className="px-2.5 py-1.5 bg-white dark:bg-vscode-input accent-hover-soft text-slate-700 dark:text-vscode-text border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap transition shadow-xs disabled:opacity-50 cursor-pointer"
+            className="px-2.5 py-1.5 bg-white dark:bg-vscode-input accent-hover-soft text-slate-700 dark:text-vscode-text border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             title="Crea Quiz a risposta multipla dalla nota attiva"
           >
             <Sparkles className="w-3.5 h-3.5 accent-icon" />
@@ -387,6 +411,15 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
 
       {/* Quiz Content */}
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-3 bg-slate-200/50 dark:bg-[#141414]">
+        {isAiBlocked && aiAccessStatus && (
+          <AiAccessGateCard
+            accessStatus={aiAccessStatus}
+            onRequestAccess={onRequestAiAccess}
+            onRefreshStatus={onRefreshAiAccess}
+            onToast={onToast}
+            compact
+          />
+        )}
         {!activeNote ? (
           <div className="text-center text-xs text-slate-500 dark:text-vscode-textMuted mt-10">
             Apri una nota per creare o svolgere un quiz.

@@ -59,7 +59,10 @@ import {
   saveCodeColors,
   type CodeColorScheme,
 } from '../utils/codeSyntax';
+import { fetchAiAccessStatus, requestAiAccessApi } from '../utils/aiApi';
 import type {
+  AiAccessRequestResult,
+  AiAccessStatus,
   AiResponseLanguage,
   AiResponseStyle,
   Flashcard,
@@ -138,6 +141,8 @@ export function useWorkspaceStore() {
     DEFAULT_PANEL_WIDTHS,
   );
   const [panelOrder, setPanelOrderState] = useState<WindowId[]>(DEFAULT_PANEL_ORDER);
+  const [aiAccessStatus, setAiAccessStatus] = useState<AiAccessStatus | null>(null);
+  const [aiAccessLoading, setAiAccessLoading] = useState<boolean>(false);
 
   const [saveStatus, setSaveStatus] = useState<'Salvato' | 'Salvataggio...'>('Salvato');
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -187,6 +192,41 @@ export function useWorkspaceStore() {
     return undefined;
   }, [themeMode]);
 
+  const refreshAiAccess = useCallback(async () => {
+    if (!auth.currentUser) {
+      setAiAccessStatus(null);
+      return;
+    }
+    setAiAccessLoading(true);
+    try {
+      const status = await fetchAiAccessStatus();
+      setAiAccessStatus(status);
+    } catch {
+      // Static host or transient error: avoid disrupting workspace
+    } finally {
+      setAiAccessLoading(false);
+    }
+  }, []);
+
+  const requestAiAccess = useCallback(
+    async (note = ''): Promise<AiAccessRequestResult> => {
+      const result = await requestAiAccessApi(note);
+      await refreshAiAccess();
+      if (result.authorized) {
+        showToast('Il tuo account è già autorizzato per usare Gemini AI.', 'success');
+      } else if (result.emailSent) {
+        showToast('Richiesta inviata via email all\'amministratore!', 'success');
+      } else {
+        showToast(
+          'Richiesta registrata sul server. Usa il pulsante email se vuoi avvisare subito l\'amministratore.',
+          'info',
+        );
+      }
+      return result;
+    },
+    [refreshAiAccess, showToast],
+  );
+
   // Auth listener
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (firebaseUser) => {
@@ -209,10 +249,13 @@ export function useWorkspaceStore() {
         setCurrentSubjectIdState(null);
         setActiveNoteIdState(null);
         setOpenTabsState([]);
+        setAiAccessStatus(null);
+      } else {
+        void refreshAiAccess();
       }
     });
     return () => unsub();
-  }, []);
+  }, [refreshAiAccess]);
 
   // Bootstrap user profile & starter data on first login
   useEffect(() => {
@@ -2194,5 +2237,9 @@ export function useWorkspaceStore() {
     importBackupData,
     importLegacyLocalStorage,
     dismissLegacyBanner: () => setHasLegacyBackup(false),
+    aiAccessStatus,
+    aiAccessLoading,
+    refreshAiAccess,
+    requestAiAccess,
   };
 }

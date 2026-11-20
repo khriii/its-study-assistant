@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
+  Check,
   CheckCircle2,
+  Copy,
   Cpu,
   Download,
   FileCode2,
@@ -11,13 +13,17 @@ import {
   Info,
   Keyboard,
   ListChecks,
+  Loader2,
   Palette,
   Plus,
+  RefreshCw,
   Search,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Terminal,
   Trash2,
+  UserCheck,
   X,
 } from 'lucide-react';
 import {
@@ -28,9 +34,15 @@ import {
   PRESET_ACCENT_COLORS,
   STUDY_DIFFICULTY_OPTIONS,
 } from '../constants/defaults';
-import { isStaticHostWithoutAiBackend } from '../utils/aiApi';
+import {
+  decideAiAccessApi,
+  fetchAdminAiAccessOverview,
+  isStaticHostWithoutAiBackend,
+} from '../utils/aiApi';
 import { PresetColorPicker } from './PresetColorPicker';
 import type {
+  AiAccessStatus,
+  AiAdminAccessOverview,
   AiResponseLanguage,
   AiResponseStyle,
   GeminiModelId,
@@ -55,6 +67,8 @@ export interface WorkspaceSettingsValue {
 interface SettingsModalProps {
   open: boolean;
   settings: WorkspaceSettingsValue;
+  aiAccessStatus: AiAccessStatus | null;
+  onToast: (message: string, type?: 'success' | 'error' | 'info') => void;
   onClose: () => void;
   onSave: (next: WorkspaceSettingsValue) => void;
 }
@@ -62,16 +76,72 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   open,
   settings,
+  aiAccessStatus,
+  onToast,
   onClose,
   onSave,
 }) => {
   const [draft, setDraft] = useState<WorkspaceSettingsValue>(settings);
+  const [adminOverview, setAdminOverview] = useState<AiAdminAccessOverview | null>(null);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [decidingEmail, setDecidingEmail] = useState<string | null>(null);
+  const [manualEmail, setManualEmail] = useState('');
+
+  const loadAdminOverview = useCallback(async () => {
+    if (!aiAccessStatus?.isAdmin) return;
+    setAdminLoading(true);
+    try {
+      const data = await fetchAdminAiAccessOverview();
+      setAdminOverview(data);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Impossibile caricare gli accessi AI.';
+      onToast(msg, 'error');
+    } finally {
+      setAdminLoading(false);
+    }
+  }, [aiAccessStatus?.isAdmin, onToast]);
 
   useEffect(() => {
     if (open) {
       setDraft(settings);
+      if (aiAccessStatus?.isAdmin) {
+        void loadAdminOverview();
+      } else {
+        setAdminOverview(null);
+      }
     }
-  }, [open, settings]);
+  }, [open, settings, aiAccessStatus?.isAdmin, loadAdminOverview]);
+
+  const handleDecision = async (email: string, decision: 'approve' | 'reject' | 'revoke') => {
+    setDecidingEmail(email);
+    try {
+      const updated = await decideAiAccessApi(email, decision);
+      setAdminOverview(updated);
+      if (decision === 'approve') {
+        onToast(`Accesso AI approvato per ${email}.`, 'success');
+      } else if (decision === 'reject') {
+        onToast(`Richiesta rifiutata per ${email}.`, 'info');
+      } else {
+        onToast(`Accesso AI revocato per ${email}.`, 'info');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Errore aggiornamento accesso.';
+      onToast(msg, 'error');
+    } finally {
+      setDecidingEmail(null);
+    }
+  };
+
+  const handleAddManualEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned = manualEmail.trim().toLowerCase();
+    if (!cleaned || !cleaned.includes('@')) {
+      onToast('Inserisci un indirizzo email Google valido.', 'info');
+      return;
+    }
+    await handleDecision(cleaned, 'approve');
+    setManualEmail('');
+  };
 
   if (!open) return null;
 
@@ -188,11 +258,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border flex items-start gap-2.5 text-[11px] text-slate-600 dark:text-vscode-textMuted leading-relaxed">
               <Cpu className="w-3.5 h-3.5 accent-icon shrink-0 mt-0.5" />
-              <span>
-                {isStaticHostWithoutAiBackend()
-                  ? 'Stai usando la versione statica su GitHub Pages: appunti, PDF e sincronizzazione Firebase funzionano, mentre le chiamate Gemini AI vengono eseguite solo tramite il server Node (/api/ai/*) in AI Studio o su un backend collegato con VITE_AI_API_URL (nessuna API key viene inserita nel browser).'
-                  : "La connessione a Gemini AI è gestita automaticamente dal server dell'app: non è necessario inserire manualmente alcuna API key."}
-              </span>
+              <div className="space-y-1">
+                <div>
+                  {isStaticHostWithoutAiBackend()
+                    ? 'Stai usando la versione statica su GitHub Pages: appunti, PDF e sincronizzazione Firebase funzionano, mentre le chiamate Gemini AI vengono eseguite solo tramite il server Node (/api/ai/*) in AI Studio o su un backend collegato con VITE_AI_API_URL (nessuna API key viene inserita nel browser).'
+                    : "La connessione a Gemini AI è gestita dal server dell'app con accesso controllato per account Google: non è necessario inserire manualmente alcuna API key."}
+                </div>
+                {aiAccessStatus && (
+                  <div className="font-medium text-slate-700 dark:text-vscode-textBright">
+                    Stato account:{' '}
+                    {aiAccessStatus.authorized ? (
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        Autorizzato ({aiAccessStatus.rateLimitPerMin} req/min)
+                      </span>
+                    ) : aiAccessStatus.pending ? (
+                      <span className="text-amber-600 dark:text-amber-400">
+                        In attesa di approvazione ({aiAccessStatus.adminEmail})
+                      </span>
+                    ) : (
+                      <span className="text-red-500">
+                        Approvazione richiesta ({aiAccessStatus.adminEmail})
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -382,6 +472,217 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Section 4: Admin AI Access Management */}
+          {aiAccessStatus?.isAdmin && (
+            <>
+              <div className="border-t border-slate-200 dark:border-vscode-border" />
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-[11px] font-mono font-semibold uppercase tracking-wider accent-text flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Gestione Accessi AI (Admin)</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={adminLoading}
+                    onClick={() => void loadAdminOverview()}
+                    className="text-[11px] text-slate-500 hover:text-slate-800 dark:text-vscode-textMuted dark:hover:text-white flex items-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${adminLoading ? 'animate-spin' : ''}`} />
+                    <span>Aggiorna</span>
+                  </button>
+                </div>
+
+                {adminLoading && !adminOverview ? (
+                  <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-vscode-textMuted py-2">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Caricamento richieste di accesso...</span>
+                  </div>
+                ) : adminOverview ? (
+                  <div className="space-y-3">
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border text-[11px] text-slate-600 dark:text-vscode-textMuted space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span>
+                          Email SMTP:{' '}
+                          <strong
+                            className={
+                              adminOverview.smtpConfigured
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-amber-600 dark:text-amber-400'
+                            }
+                          >
+                            {adminOverview.smtpConfigured ? 'Attive' : 'Non configurate'}
+                          </strong>
+                        </span>
+                        <span className="font-mono tabular-nums">
+                          Limite: {adminOverview.rateLimitPerMin} req/min
+                        </span>
+                      </div>
+                      {!adminOverview.smtpConfigured && (
+                        <div className="text-[10px] leading-relaxed">
+                          Per ricevere automaticamente email con i pulsanti Approva/Rifiuta su{' '}
+                          <strong>{adminOverview.adminEmail}</strong>, aggiungi{' '}
+                          <code>SMTP_USER</code> e <code>SMTP_PASS</code> (App Password Gmail) nei Secrets di AI Studio.
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Pending Requests */}
+                    <div className="space-y-1.5">
+                      <div className="text-xs font-semibold text-slate-700 dark:text-vscode-textBright">
+                        Richieste in attesa ({adminOverview.pendingRequests.length})
+                      </div>
+                      {adminOverview.pendingRequests.length === 0 ? (
+                        <div className="text-[11px] text-slate-500 dark:text-vscode-textMuted italic">
+                          Nessuna richiesta in sospeso.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {adminOverview.pendingRequests.map((reqItem) => {
+                            const busy = decidingEmail === reqItem.email;
+                            return (
+                              <div
+                                key={reqItem.email}
+                                className="p-2.5 rounded-xl bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border flex items-start justify-between gap-2"
+                              >
+                                <div className="min-w-0">
+                                  <div className="text-xs font-semibold text-slate-800 dark:text-vscode-textBright truncate">
+                                    {reqItem.displayName || reqItem.email}
+                                  </div>
+                                  <div className="text-[11px] font-mono text-slate-500 dark:text-vscode-textMuted truncate">
+                                    {reqItem.email}
+                                  </div>
+                                  {reqItem.note && (
+                                    <div className="text-[11px] text-slate-600 dark:text-vscode-text mt-1">
+                                      &ldquo;{reqItem.note}&rdquo;
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-1.5 flex-none">
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => void handleDecision(reqItem.email, 'approve')}
+                                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                                  >
+                                    <Check className="w-3 h-3" />
+                                    <span>Approva</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => void handleDecision(reqItem.email, 'reject')}
+                                    className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white text-[11px] font-semibold flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                                  >
+                                    <X className="w-3 h-3" />
+                                    <span>Rifiuta</span>
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Manual pre-approve */}
+                    <form onSubmit={(e) => void handleAddManualEmail(e)} className="flex gap-1.5">
+                      <input
+                        type="email"
+                        value={manualEmail}
+                        onChange={(e) => setManualEmail(e.target.value)}
+                        placeholder="Autorizza subito un'email Google..."
+                        className="flex-1 px-2.5 py-1.5 bg-slate-50 dark:bg-vscode-input border border-slate-200 dark:border-vscode-borderLight rounded-lg text-xs text-slate-800 dark:text-vscode-textBright focus:outline-none accent-focus"
+                      />
+                      <button
+                        type="submit"
+                        disabled={decidingEmail !== null || !manualEmail.trim()}
+                        className="px-3 py-1.5 rounded-lg accent-btn text-xs font-semibold flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                      >
+                        <UserCheck className="w-3.5 h-3.5" />
+                        <span>Aggiungi</span>
+                      </button>
+                    </form>
+
+                    {/* Authorized emails list */}
+                    <div className="space-y-1.5">
+                      <div className="text-xs font-semibold text-slate-700 dark:text-vscode-textBright">
+                        Utenti autorizzati
+                      </div>
+                      <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                        <div className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border flex items-center justify-between text-[11px]">
+                          <span className="font-mono text-slate-700 dark:text-vscode-textBright truncate">
+                            {adminOverview.adminEmail}
+                          </span>
+                          <span className="text-[10px] font-semibold accent-text">Admin</span>
+                        </div>
+                        {adminOverview.envAllowedEmails.map((email) => (
+                          <div
+                            key={`env_${email}`}
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border flex items-center justify-between text-[11px]"
+                          >
+                            <span className="font-mono text-slate-700 dark:text-vscode-textBright truncate">
+                              {email}
+                            </span>
+                            <span className="text-[10px] text-slate-400">da Secrets</span>
+                          </div>
+                        ))}
+                        {adminOverview.approvedEmails
+                          .filter(
+                            (email) =>
+                              email !== adminOverview.adminEmail &&
+                              !adminOverview.envAllowedEmails.includes(email),
+                          )
+                          .map((email) => (
+                            <div
+                              key={email}
+                              className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border flex items-center justify-between gap-2 text-[11px]"
+                            >
+                              <span className="font-mono text-slate-700 dark:text-vscode-textBright truncate">
+                                {email}
+                              </span>
+                              <button
+                                type="button"
+                                disabled={decidingEmail === email}
+                                onClick={() => void handleDecision(email, 'revoke')}
+                                className="text-[11px] text-red-500 hover:underline font-medium shrink-0 cursor-pointer"
+                              >
+                                Revoca
+                              </button>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+
+                    {adminOverview.suggestedAllowedEnv && (
+                      <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border space-y-1.5">
+                        <div className="flex items-center justify-between gap-2 text-[11px]">
+                          <span className="font-semibold text-slate-700 dark:text-vscode-textBright">
+                            Backup per Secret <code>ALLOWED_USER_EMAILS</code>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void navigator.clipboard.writeText(adminOverview.suggestedAllowedEnv);
+                              onToast('Valore ALLOWED_USER_EMAILS copiato negli appunti.', 'success');
+                            }}
+                            className="text-[11px] accent-text hover:underline flex items-center gap-1 cursor-pointer"
+                          >
+                            <Copy className="w-3 h-3" />
+                            <span>Copia</span>
+                          </button>
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-500 dark:text-vscode-textMuted break-all">
+                          {adminOverview.suggestedAllowedEnv}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="px-5 py-3 bg-slate-50 dark:bg-vscode-bg border-t border-slate-200 dark:border-vscode-border flex justify-end gap-2 flex-none">

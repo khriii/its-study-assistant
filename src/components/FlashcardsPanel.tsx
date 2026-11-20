@@ -1,8 +1,16 @@
 import React, { useState } from 'react';
 import { GripVertical, Layers, Loader2, RotateCw, Sparkles, Trash2 } from 'lucide-react';
-import { getAiEndpoint, parseAiJsonResponse } from '../utils/aiApi';
+import {
+  AiApiError,
+  getAiEndpoint,
+  getFirebaseAuthHeaders,
+  parseAiJsonResponse,
+} from '../utils/aiApi';
 import { stripHtml } from '../utils/exporters';
+import { AiAccessGateCard } from './AiAccessGateCard';
 import type {
+  AiAccessRequestResult,
+  AiAccessStatus,
   AiResponseLanguage,
   Flashcard,
   GeminiModelId,
@@ -18,6 +26,9 @@ interface FlashcardsPanelProps {
   studyDifficulty: StudyDifficulty;
   aiResponseLanguage: AiResponseLanguage;
   cards: Flashcard[];
+  aiAccessStatus: AiAccessStatus | null;
+  onRequestAiAccess: (note?: string) => Promise<AiAccessRequestResult>;
+  onRefreshAiAccess: () => Promise<void>;
   onAddCards: (noteId: string, subjectId: string, cards: { q: string; a: string }[]) => Promise<void>;
   onDeleteCard: (cardId: string) => void;
   onToast: (message: string, type?: 'success' | 'error' | 'info') => void;
@@ -33,6 +44,9 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
   studyDifficulty,
   aiResponseLanguage,
   cards,
+  aiAccessStatus,
+  onRequestAiAccess,
+  onRefreshAiAccess,
   onAddCards,
   onDeleteCard,
   onToast,
@@ -41,8 +55,13 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
 }) => {
   const [generating, setGenerating] = useState(false);
   const [flippedIds, setFlippedIds] = useState<Record<string, boolean>>({});
+  const isAiBlocked = Boolean(aiAccessStatus && !aiAccessStatus.authorized);
 
   const handleGenerate = async () => {
+    if (isAiBlocked) {
+      onToast('Richiedi prima l\'approvazione per usare Gemini AI.', 'info');
+      return;
+    }
     const noteText = activeNote ? stripHtml(activeNote.content).trim() : '';
     if (!activeNote || !noteText) {
       onToast('Apri o scrivi una nota prima di generare le flashcard.', 'info');
@@ -51,9 +70,10 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
 
     setGenerating(true);
     try {
+      const headers = await getFirebaseAuthHeaders({ 'Content-Type': 'application/json' });
       const res = await fetch(getAiEndpoint('/api/ai/flashcards'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           model: geminiModel,
           noteText,
@@ -63,10 +83,11 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
           responseLanguage: aiResponseLanguage,
         }),
       });
-      const data = await parseAiJsonResponse<{ cards?: { q: string; a: string }[]; error?: string }>(
-        res,
-        '/api/ai/flashcards',
-      );
+      const data = await parseAiJsonResponse<{
+        cards?: { q: string; a: string }[];
+        error?: string;
+        code?: string;
+      }>(res, '/api/ai/flashcards');
       if (!Array.isArray(data.cards) || data.cards.length === 0) {
         throw new Error('Nessuna flashcard generata.');
       }
@@ -74,6 +95,9 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
       await onAddCards(activeNote.id, activeNote.subjectId, data.cards);
       onToast(`${data.cards.length} Flashcard generate con successo!`, 'success');
     } catch (err: unknown) {
+      if (err instanceof AiApiError && (err.status === 403 || err.code === 'AI_ACCESS_REQUIRED')) {
+        void onRefreshAiAccess();
+      }
       const msg = err instanceof Error ? err.message : 'Errore generazione AI.';
       onToast(`Errore AI: ${msg}`, 'error');
     } finally {
@@ -102,9 +126,9 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
         </span>
         <button
           type="button"
-          disabled={generating}
+          disabled={generating || isAiBlocked}
           onClick={() => void handleGenerate()}
-          className="px-2.5 py-1.5 bg-white dark:bg-vscode-input hover:bg-emerald-50 dark:hover:bg-vscode-hover text-slate-700 dark:text-vscode-text border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap transition shadow-xs disabled:opacity-50 cursor-pointer"
+          className="px-2.5 py-1.5 bg-white dark:bg-vscode-input hover:bg-emerald-50 dark:hover:bg-vscode-hover text-slate-700 dark:text-vscode-text border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           title="Genera Flashcards con AI"
         >
           <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
@@ -113,13 +137,22 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-3 bg-slate-200/50 dark:bg-[#141414]">
+        {isAiBlocked && aiAccessStatus && (
+          <AiAccessGateCard
+            accessStatus={aiAccessStatus}
+            onRequestAccess={onRequestAiAccess}
+            onRefreshStatus={onRefreshAiAccess}
+            onToast={onToast}
+            compact
+          />
+        )}
         {generating ? (
           <div className="flex flex-col items-center justify-center py-10 text-xs text-slate-500 dark:text-vscode-textMuted gap-2">
             <Loader2 className="w-5 h-5 animate-spin text-emerald-500" />
             <span>Generazione flashcard con AI...</span>
           </div>
         ) : cards.length === 0 ? (
-          <div className="text-center text-xs text-slate-500 dark:text-vscode-textMuted mt-10 px-4 leading-relaxed">
+          <div className="text-center text-xs text-slate-500 dark:text-vscode-textMuted mt-6 px-4 leading-relaxed">
             Nessuna flashcard per questa nota. Clicca su &ldquo;Genera&rdquo; per crearle con l&apos;AI.
           </div>
         ) : (
