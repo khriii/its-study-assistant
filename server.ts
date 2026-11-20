@@ -96,13 +96,19 @@ function formatGeminiError(error: unknown): { status: number; message: string } 
   if (raw.includes('GEMINI_API_KEY')) {
     return {
       status: 500,
-      message: 'Chiave GEMINI_API_KEY non configurata sul server applicativo.',
+      message: 'Chiave GEMINI_API_KEY non configurata o non valida sul server (controlla Settings > Secrets in AI Studio).',
     };
   }
-  if (/403|PERMISSION_DENIED|API_KEY_INVALID/i.test(raw)) {
+  if (/401|UNAUTHENTICATED|API key not valid|ACCESS_TOKEN_TYPE_UNSUPPORTED|API_KEY_INVALID/i.test(raw)) {
+    return {
+      status: 401,
+      message: 'Chiave API Gemini non valida o mancante sul server. Verifica o seleziona una chiave valida nel pannello Settings > Secrets di AI Studio e riavvia il server.',
+    };
+  }
+  if (/403|PERMISSION_DENIED/i.test(raw)) {
     return {
       status: 403,
-      message: 'Chiave API Gemini non valida o permessi insufficienti sul server (Settings > Secrets).',
+      message: 'Permessi insufficienti per la chiave API Gemini configurata (controlla Settings > Secrets in AI Studio).',
     };
   }
   if (/404|NOT_FOUND/i.test(raw)) {
@@ -121,12 +127,14 @@ function formatGeminiError(error: unknown): { status: number; message: string } 
 }
 
 function getGenAIClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+  const rawKey = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '')
+    .trim()
+    .replace(/^["']|["']$/g, '');
+  if (!rawKey || rawKey === 'MY_GEMINI_API_KEY') {
     throw new Error('GEMINI_API_KEY non configurata sul server.');
   }
   return new GoogleGenAI({
-    apiKey,
+    apiKey: rawKey,
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
@@ -458,9 +466,9 @@ async function startServer(): Promise<void> {
         exitCode: Number.isInteger(Number(parsed.exitCode)) ? Number(parsed.exitCode) : 0,
       });
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Errore esecuzione codice.';
-      console.error('Errore /api/ai/run-code:', message);
-      res.status(500).json({ error: message });
+      const formatted = formatGeminiError(error);
+      console.error('Errore /api/ai/run-code:', formatted.message);
+      res.status(formatted.status).json({ error: formatted.message });
     }
   });
 
