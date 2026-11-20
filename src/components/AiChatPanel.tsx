@@ -10,6 +10,9 @@ import {
   Image as ImageIcon,
   Lightbulb,
   Loader2,
+  Maximize2,
+  Minimize2,
+  PanelTop,
   Paperclip,
   RotateCcw,
   Send,
@@ -38,6 +41,7 @@ import type {
   ChatMessage,
   GeminiModelId,
   Note,
+  PanelWindowActions,
   StudyFile,
   Subject,
 } from '../types';
@@ -48,7 +52,7 @@ export interface ExternalAiPrompt {
   label: string;
 }
 
-interface AiChatPanelProps {
+interface AiChatPanelProps extends PanelWindowActions {
   currentSubject: Subject | null;
   activeNote: Note | null;
   notes: Note[];
@@ -82,6 +86,12 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
   onToast,
   onHeaderDragStart,
   onHeaderDragEnd,
+  hideWindowHeader = false,
+  iconOnlyHeader = false,
+  isMaximized = false,
+  onToggleMaximize,
+  onClosePanel,
+  onSwitchToTabs,
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
@@ -456,27 +466,75 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
       )}
 
       {/* Header */}
-      <div
-        draggable
-        onDragStart={onHeaderDragStart}
-        onDragEnd={onHeaderDragEnd}
-        className="window-header h-9 px-3 border-b border-slate-200 dark:border-vscode-border flex justify-between items-center bg-slate-200/80 dark:bg-vscode-border flex-none cursor-grab"
-      >
-        <span className="font-mono text-[11px] font-semibold tracking-wider text-slate-500 dark:text-vscode-textMuted uppercase flex items-center gap-1.5">
-          <GripVertical className="w-3 h-3 text-slate-400" />
-          <Bot className="w-3 h-3 text-purple-500" />
-          <span>AI Chat</span>
-        </span>
-        <button
-          type="button"
-          onClick={resetChat}
-          className="text-[11px] text-slate-500 hover:text-slate-800 dark:text-vscode-textMuted dark:hover:text-vscode-textBright transition flex items-center gap-1 cursor-pointer"
-          title="Nuova conversazione"
+      {!hideWindowHeader && (
+        <div
+          draggable
+          onDragStart={onHeaderDragStart}
+          onDragEnd={onHeaderDragEnd}
+          className="window-header h-9 px-3 border-b border-slate-200 dark:border-vscode-border flex justify-between items-center bg-slate-200/80 dark:bg-vscode-border flex-none cursor-grab"
         >
-          <RotateCcw className="w-3 h-3" />
-          <span>Reset</span>
-        </button>
-      </div>
+          <span
+            title="AI Chat"
+            className="font-mono text-[11px] font-semibold tracking-wider text-slate-500 dark:text-vscode-textMuted uppercase flex items-center gap-1.5 min-w-0"
+          >
+            <GripVertical className="w-3 h-3 text-slate-400 shrink-0" />
+            <Bot className="w-3.5 h-3.5 text-purple-500 shrink-0" />
+            {!iconOnlyHeader && <span className="truncate">AI Chat</span>}
+          </span>
+          <div
+            className="flex items-center gap-1 shrink-0"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              draggable={false}
+              onClick={resetChat}
+              className="px-1.5 py-0.5 rounded text-[11px] text-slate-500 hover:text-slate-800 dark:text-vscode-textMuted dark:hover:text-vscode-textBright hover:bg-black/5 dark:hover:bg-white/10 transition flex items-center gap-1 cursor-pointer"
+              title="Nuova conversazione"
+            >
+              <RotateCcw className="w-3 h-3" />
+              {!iconOnlyHeader && <span>Reset</span>}
+            </button>
+            {onSwitchToTabs && !isMaximized && (
+              <button
+                type="button"
+                draggable={false}
+                onClick={onSwitchToTabs}
+                className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+                title="Raggruppa in schede compatte"
+              >
+                <PanelTop className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {onToggleMaximize && (
+              <button
+                type="button"
+                draggable={false}
+                onClick={onToggleMaximize}
+                className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+                title={isMaximized ? 'Ripristina finestra (Esc)' : 'Massimizza finestra'}
+              >
+                {isMaximized ? (
+                  <Minimize2 className="w-3.5 h-3.5" />
+                ) : (
+                  <Maximize2 className="w-3.5 h-3.5" />
+                )}
+              </button>
+            )}
+            {onClosePanel && !isMaximized && (
+              <button
+                type="button"
+                draggable={false}
+                onClick={onClosePanel}
+                className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-red-500 hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+                title="Chiudi pannello"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Quick Study Actions */}
       <div className="p-2 border-b border-slate-200 dark:border-vscode-border bg-slate-100 dark:bg-vscode-tabInactive flex items-center gap-1.5 overflow-x-auto hide-scrollbar flex-none">
@@ -507,6 +565,17 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
           <HelpCircle className="w-3 h-3 text-emerald-500" />
           <span>Mini-Quiz</span>
         </button>
+        {hideWindowHeader && (
+          <button
+            type="button"
+            onClick={resetChat}
+            className="ml-auto px-2 py-1.5 bg-white dark:bg-vscode-input hover:bg-slate-200 dark:hover:bg-vscode-hover text-slate-600 dark:text-vscode-text border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1 whitespace-nowrap transition shadow-xs cursor-pointer"
+            title="Nuova conversazione"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Reset</span>
+          </button>
+        )}
       </div>
 
       {/* Chat Feed */}

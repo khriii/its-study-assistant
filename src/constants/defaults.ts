@@ -2,8 +2,11 @@ import type {
   AiResponseLanguage,
   AiResponseStyle,
   GeminiModelId,
+  LayoutPresetId,
+  PanelColumnGroup,
   StudyDifficulty,
   ThemeMode,
+  WindowHeaderLabelMode,
   WindowId,
 } from '../types';
 
@@ -49,6 +52,103 @@ export const DEFAULT_PANEL_ORDER: WindowId[] = [
   'right-panel',
 ];
 
+export const DEFAULT_PANEL_COLUMNS: PanelColumnGroup[] = [
+  { panels: ['sidebar'], activeTab: 'sidebar' },
+  { panels: ['pdf-viewer-panel'], activeTab: 'pdf-viewer-panel' },
+  { panels: ['left-panel'], activeTab: 'left-panel' },
+  {
+    panels: ['right-panel', 'flashcards-panel', 'quiz-panel'],
+    activeTab: 'right-panel',
+  },
+];
+
+export interface LayoutPresetConfig {
+  id: LayoutPresetId;
+  label: string;
+  description: string;
+  windowVisibility: Record<WindowId, boolean>;
+  panelColumns: PanelColumnGroup[];
+  collapsedExplorer: boolean;
+}
+
+export const LAYOUT_PRESETS: LayoutPresetConfig[] = [
+  {
+    id: 'studio-base',
+    label: 'Studio Base',
+    description: 'Explorer · Editor · AI Chat',
+    windowVisibility: {
+      sidebar: true,
+      'pdf-viewer-panel': false,
+      'left-panel': true,
+      'flashcards-panel': false,
+      'quiz-panel': false,
+      'right-panel': true,
+    },
+    panelColumns: DEFAULT_PANEL_COLUMNS,
+    collapsedExplorer: false,
+  },
+  {
+    id: 'lettura-slide',
+    label: 'Lettura Slide',
+    description: 'Explorer · Slide PDF · Editor',
+    windowVisibility: {
+      sidebar: true,
+      'pdf-viewer-panel': true,
+      'left-panel': true,
+      'flashcards-panel': false,
+      'quiz-panel': false,
+      'right-panel': false,
+    },
+    panelColumns: DEFAULT_PANEL_COLUMNS,
+    collapsedExplorer: false,
+  },
+  {
+    id: 'ripasso-totale',
+    label: 'Ripasso Totale',
+    description: 'Editor · Schede impilate AI, Card, Quiz',
+    windowVisibility: {
+      sidebar: true,
+      'pdf-viewer-panel': false,
+      'left-panel': true,
+      'flashcards-panel': true,
+      'quiz-panel': true,
+      'right-panel': true,
+    },
+    panelColumns: DEFAULT_PANEL_COLUMNS,
+    collapsedExplorer: true,
+  },
+  {
+    id: 'tutto-aperto',
+    label: 'Tutto Aperto (6)',
+    description: 'Tutte e 6 le finestre accessibili',
+    windowVisibility: {
+      sidebar: true,
+      'pdf-viewer-panel': true,
+      'left-panel': true,
+      'flashcards-panel': true,
+      'quiz-panel': true,
+      'right-panel': true,
+    },
+    panelColumns: DEFAULT_PANEL_COLUMNS,
+    collapsedExplorer: false,
+  },
+  {
+    id: 'solo-editor',
+    label: 'Focus Scrittura',
+    description: 'Explorer ridotto · Editor ampio',
+    windowVisibility: {
+      sidebar: true,
+      'pdf-viewer-panel': false,
+      'left-panel': true,
+      'flashcards-panel': false,
+      'quiz-panel': false,
+      'right-panel': false,
+    },
+    panelColumns: DEFAULT_PANEL_COLUMNS,
+    collapsedExplorer: true,
+  },
+];
+
 export const DEFAULT_THEME_MODE: ThemeMode = 'system';
 export const DEFAULT_GEMINI_MODEL: GeminiModelId = 'gemini-4-hydrogen';
 
@@ -60,6 +160,17 @@ export const DEFAULT_STUDY_DIFFICULTY: StudyDifficulty = 'intermediate';
 export const DEFAULT_AUTO_SHOW_EXPLANATIONS = true;
 export const DEFAULT_EDITOR_FONT_SIZE = 14;
 export const DEFAULT_EDITOR_LINE_HEIGHT = 1.65;
+export const DEFAULT_WINDOW_HEADER_LABEL_MODE: WindowHeaderLabelMode = 'always';
+
+export const WINDOW_HEADER_LABEL_OPTIONS: {
+  value: WindowHeaderLabelMode;
+  label: string;
+  description: string;
+}[] = [
+  { value: 'always', label: 'Mostra sempre', description: 'Icona + nome' },
+  { value: 'auto', label: 'Solo se impilate', description: 'Solo icona in gruppo' },
+  { value: 'icons-only', label: 'Solo icone', description: 'Sempre compatto' },
+];
 
 export const GEMINI_MODEL_OPTIONS: { value: GeminiModelId; label: string; badge: string }[] = [
   {

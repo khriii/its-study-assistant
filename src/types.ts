@@ -21,6 +21,35 @@ export type MobilePanelId =
   | 'quiz-panel'
   | 'right-panel';
 
+export type ContainerLayoutMode = 'tabs' | 'vertical';
+
+export type WindowHeaderLabelMode = 'always' | 'auto' | 'icons-only';
+
+export interface PanelColumnGroup {
+  panels: WindowId[];
+  activeTab: WindowId;
+  layout?: ContainerLayoutMode;
+  width?: number;
+  heights?: Record<string, number>;
+}
+
+export type LayoutPresetId =
+  | 'studio-base'
+  | 'lettura-slide'
+  | 'ripasso-totale'
+  | 'tutto-aperto'
+  | 'solo-editor';
+
+export interface PanelWindowActions {
+  hideWindowHeader?: boolean;
+  iconOnlyHeader?: boolean;
+  isMaximized?: boolean;
+  onToggleMaximize?: () => void;
+  onClosePanel?: () => void;
+  onToggleCollapseExplorer?: () => void;
+  onSwitchToTabs?: () => void;
+}
+
 export interface Subject {
   id: string;
   userId: string;
@@ -107,6 +136,10 @@ export interface WorkspacePreferences {
   windowVisibility: Record<WindowId, boolean>;
   panelWidths: Record<Exclude<WindowId, 'left-panel'>, number>;
   panelOrder: WindowId[];
+  panelColumns?: PanelColumnGroup[];
+  collapsedExplorer?: boolean;
+  activeLayoutPreset?: LayoutPresetId | null;
+  windowHeaderLabelMode?: WindowHeaderLabelMode;
   updatedAt?: unknown;
 }
 

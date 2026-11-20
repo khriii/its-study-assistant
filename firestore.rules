@@ -29,6 +29,10 @@ service cloud.firestore {
       return isVerified() && request.auth.uid == userId;
     }
 
+    function isAiAdmin() {
+      return isVerified() && request.auth.token.email == 'christianstelluti7@gmail.com';
+    }
+
     function isValidId(id) {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -81,6 +85,10 @@ service cloud.firestore {
           'windowVisibility',
           'panelWidths',
           'panelOrder',
+          'panelColumns',
+          'collapsedExplorer',
+          'activeLayoutPreset',
+          'windowHeaderLabelMode',
           'updatedAt'
         ])
         && data.userId is string && data.userId == userId
@@ -103,6 +111,10 @@ service cloud.firestore {
         && data.panelWidths is map
         && data.panelWidths.keys().hasOnly(['sidebar', 'pdf-viewer-panel', 'flashcards-panel', 'quiz-panel', 'right-panel'])
         && data.panelOrder is list && data.panelOrder.size() == 6 && data.panelOrder[0] is string
+        && (!('panelColumns' in data) || (data.panelColumns is list && data.panelColumns.size() >= 1 && data.panelColumns.size() <= 6 && data.panelColumns[0] is map))
+        && (!('collapsedExplorer' in data) || data.collapsedExplorer is bool)
+        && (!('activeLayoutPreset' in data) || data.activeLayoutPreset == null || (data.activeLayoutPreset is string && data.activeLayoutPreset.size() <= 40))
+        && (!('windowHeaderLabelMode' in data) || data.windowHeaderLabelMode in ['always', 'auto', 'icons-only'])
         && data.updatedAt is timestamp;
     }
 
@@ -206,6 +218,78 @@ service cloud.firestore {
         && data.data is string && data.data.size() >= 1 && data.data.size() <= 600000;
     }
 
+    function isValidAiAccessRequest(data, requestId) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'note', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'note', 'status', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid == requestId && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.note is string && data.note.size() <= 500
+        && data.status in ['pending', 'approved', 'rejected']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAiAllowlistEntry(data, emailHash) {
+      return data.keys().hasAll(['id', 'email', 'approved', 'approvedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'email', 'approved', 'approvedBy', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id == emailHash && isValidId(data.id)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.approved is bool
+        && data.approvedBy is string && data.approvedBy.size() >= 3 && data.approvedBy.size() <= 254
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // --- AI ACCESS CONTROL (CROSS-INSTANCE SYNC) ---
+    match /aiAccessRequests/{requestId} {
+      allow get: if isValidId(requestId) && (isOwner(requestId) || isAiAdmin());
+      allow list: if isAiAdmin() || (isVerified() && resource.data.uid == request.auth.uid);
+      allow create: if isValidId(requestId)
+        && isOwner(requestId)
+        && isValidAiAccessRequest(incoming(), requestId)
+        && incoming().uid == request.auth.uid
+        && incoming().email == request.auth.token.email
+        && incoming().status == 'pending'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(requestId)
+        && isValidAiAccessRequest(incoming(), requestId)
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (isOwner(requestId)
+            && existing().status != 'approved'
+            && incoming().status == 'pending'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'note', 'status', 'updatedAt'])) ||
+          (isAiAdmin()
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+        );
+      allow delete: if isValidId(requestId) && (isOwner(requestId) || isAiAdmin());
+    }
+
+    match /aiAllowlist/{emailHash} {
+      allow get: if isValidId(emailHash) && (isAiAdmin() || (isVerified() && resource != null && resource.data.email == request.auth.token.email));
+      allow list: if isAiAdmin() || (isVerified() && resource.data.email == request.auth.token.email);
+      allow create: if isValidId(emailHash)
+        && isAiAdmin()
+        && isValidAiAllowlistEntry(incoming(), emailHash)
+        && incoming().approvedBy == request.auth.token.email
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(emailHash)
+        && isAiAdmin()
+        && isValidAiAllowlistEntry(incoming(), emailHash)
+        && incoming().id == existing().id
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['approved', 'approvedBy', 'updatedAt']);
+      allow delete: if isValidId(emailHash) && isAiAdmin();
+    }
+
     // --- USER PROFILE & PRIVATE WORKSPACE ---
     match /users/{userId} {
       allow get: if isValidId(userId) && isOwner(userId);
@@ -250,6 +334,10 @@ service cloud.firestore {
             'windowVisibility',
             'panelWidths',
             'panelOrder',
+            'panelColumns',
+            'collapsedExplorer',
+            'activeLayoutPreset',
+            'windowHeaderLabelMode',
             'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(prefId) && isOwner(userId);

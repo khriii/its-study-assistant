@@ -12,12 +12,17 @@ import {
   FolderPlus,
   Info,
   Keyboard,
+  LayoutGrid,
   ListChecks,
   Loader2,
+  Mail,
   Palette,
+  PanelLeftClose,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
+  Send,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -31,13 +36,16 @@ import {
   AI_RESPONSE_STYLE_OPTIONS,
   EDITOR_LINE_HEIGHT_OPTIONS,
   GEMINI_MODEL_OPTIONS,
+  LAYOUT_PRESETS,
   PRESET_ACCENT_COLORS,
   STUDY_DIFFICULTY_OPTIONS,
+  WINDOW_HEADER_LABEL_OPTIONS,
 } from '../constants/defaults';
 import {
   decideAiAccessApi,
   fetchAdminAiAccessOverview,
   isStaticHostWithoutAiBackend,
+  sendAdminTestEmailApi,
 } from '../utils/aiApi';
 import { PresetColorPicker } from './PresetColorPicker';
 import type {
@@ -46,9 +54,11 @@ import type {
   AiResponseLanguage,
   AiResponseStyle,
   GeminiModelId,
+  LayoutPresetId,
   StudyDifficulty,
   Subject,
   ToastItem,
+  WindowHeaderLabelMode,
 } from '../types';
 
 /* 1. Settings Modal (AI Model, Response Style & Language, Flashcard/Quiz Generator, Editor Preferences) */
@@ -62,12 +72,14 @@ export interface WorkspaceSettingsValue {
   autoShowQuizExplanations: boolean;
   editorFontSize: number;
   editorLineHeight: number;
+  windowHeaderLabelMode: WindowHeaderLabelMode;
 }
 
 interface SettingsModalProps {
   open: boolean;
   settings: WorkspaceSettingsValue;
   aiAccessStatus: AiAccessStatus | null;
+  isAiAdmin: boolean;
   onToast: (message: string, type?: 'success' | 'error' | 'info') => void;
   onClose: () => void;
   onSave: (next: WorkspaceSettingsValue) => void;
@@ -77,6 +89,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   open,
   settings,
   aiAccessStatus,
+  isAiAdmin,
   onToast,
   onClose,
   onSave,
@@ -86,9 +99,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [adminLoading, setAdminLoading] = useState(false);
   const [decidingEmail, setDecidingEmail] = useState<string | null>(null);
   const [manualEmail, setManualEmail] = useState('');
+  const [testEmailLoading, setTestEmailLoading] = useState(false);
+  const [testEmailFeedback, setTestEmailFeedback] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+
+  const showAdminSection = isAiAdmin || Boolean(aiAccessStatus?.isAdmin);
 
   const loadAdminOverview = useCallback(async () => {
-    if (!aiAccessStatus?.isAdmin) return;
+    if (!showAdminSection) return;
     setAdminLoading(true);
     try {
       const data = await fetchAdminAiAccessOverview();
@@ -99,18 +119,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } finally {
       setAdminLoading(false);
     }
-  }, [aiAccessStatus?.isAdmin, onToast]);
+  }, [showAdminSection, onToast]);
 
   useEffect(() => {
     if (open) {
       setDraft(settings);
-      if (aiAccessStatus?.isAdmin) {
+      setTestEmailFeedback(null);
+      if (showAdminSection) {
         void loadAdminOverview();
       } else {
         setAdminOverview(null);
       }
     }
-  }, [open, settings, aiAccessStatus?.isAdmin, loadAdminOverview]);
+  }, [open, settings, showAdminSection, loadAdminOverview]);
+
+  const handleSendTestEmail = async () => {
+    if (testEmailLoading) return;
+    setTestEmailLoading(true);
+    setTestEmailFeedback(null);
+    try {
+      const res = await sendAdminTestEmailApi();
+      const msg = `Email di test inviata a ${res.to}! Controlla la casella Gmail (anche Spam).`;
+      setTestEmailFeedback({ ok: true, message: msg });
+      onToast(msg, 'success');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Errore invio test email SMTP.';
+      setTestEmailFeedback({ ok: false, message: msg });
+      onToast(msg, 'error');
+    } finally {
+      setTestEmailLoading(false);
+    }
+  };
 
   const handleDecision = async (email: string, decision: 'approve' | 'reject' | 'revoke') => {
     setDecidingEmail(email);
@@ -169,6 +208,74 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         <div className="p-5 space-y-5 overflow-y-auto flex-1">
+          {/* Highlighted Pending Approvals Banner at top for Admin */}
+          {showAdminSection && adminOverview && adminOverview.pendingRequests.length > 0 && (
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/40 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>
+                    Richieste di accesso AI in attesa ({adminOverview.pendingRequests.length})
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  disabled={adminLoading}
+                  onClick={() => void loadAdminOverview()}
+                  className="text-[11px] text-amber-700 dark:text-amber-300 hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3 h-3 ${adminLoading ? 'animate-spin' : ''}`} />
+                  <span>Aggiorna</span>
+                </button>
+              </div>
+              <div className="space-y-2">
+                {adminOverview.pendingRequests.map((reqItem) => {
+                  const busy = decidingEmail === reqItem.email;
+                  return (
+                    <div
+                      key={`top_${reqItem.email}`}
+                      className="p-2.5 rounded-xl bg-white dark:bg-vscode-sidebar border border-amber-500/30 flex items-start justify-between gap-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-slate-800 dark:text-vscode-textBright truncate">
+                          {reqItem.displayName || reqItem.email}
+                        </div>
+                        <div className="text-[11px] font-mono text-slate-500 dark:text-vscode-textMuted truncate">
+                          {reqItem.email}
+                        </div>
+                        {reqItem.note && (
+                          <div className="text-[11px] text-slate-600 dark:text-vscode-text mt-1">
+                            &ldquo;{reqItem.note}&rdquo;
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-none">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handleDecision(reqItem.email, 'approve')}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                        >
+                          <Check className="w-3 h-3" />
+                          <span>Approva</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handleDecision(reqItem.email, 'reject')}
+                          className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white text-[11px] font-semibold flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                        >
+                          <X className="w-3 h-3" />
+                          <span>Rifiuta</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Section 1: AI Model & Response Style */}
           <div className="space-y-3">
             <div className="text-[11px] font-mono font-semibold uppercase tracking-wider accent-text">
@@ -471,10 +578,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {draft.editorLineHeight}.
               </div>
             </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-vscode-textMuted mb-1.5">
+                Nomi Finestre &amp; Contenitori
+              </label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {WINDOW_HEADER_LABEL_OPTIONS.map((opt) => {
+                  const active = draft.windowHeaderLabelMode === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          windowHeaderLabelMode: opt.value,
+                        }))
+                      }
+                      className={`px-2.5 py-2 rounded-lg border text-left transition cursor-pointer ${
+                        active
+                          ? 'accent-soft-bg border-[var(--primary-500)] text-slate-900 dark:text-vscode-textBright'
+                          : 'bg-slate-50 dark:bg-vscode-input border-slate-200 dark:border-vscode-borderLight text-slate-600 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover'
+                      }`}
+                    >
+                      <div className={`text-[11px] font-semibold ${active ? 'accent-text' : ''}`}>
+                        {opt.label}
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-vscode-textMuted leading-tight mt-0.5">
+                        {opt.description}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
 
           {/* Section 4: Admin AI Access Management */}
-          {aiAccessStatus?.isAdmin && (
+          {showAdminSection && (
             <>
               <div className="border-t border-slate-200 dark:border-vscode-border" />
               <div className="space-y-3">
@@ -501,29 +643,77 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 ) : adminOverview ? (
                   <div className="space-y-3">
-                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border text-[11px] text-slate-600 dark:text-vscode-textMuted space-y-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span>
-                          Email SMTP:{' '}
-                          <strong
-                            className={
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border text-[11px] text-slate-600 dark:text-vscode-textMuted space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Mail className="w-3.5 h-3.5 accent-icon shrink-0" />
+                          <span>
+                            Notifiche SMTP:{' '}
+                            <strong
+                              className={
+                                adminOverview.smtpConfigured
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : 'text-amber-600 dark:text-amber-400'
+                              }
+                            >
+                              {adminOverview.smtpConfigured ? 'Attive' : 'Non configurate'}
+                            </strong>
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono tabular-nums text-[10px]">
+                            Limite: {adminOverview.rateLimitPerMin} req/min
+                          </span>
+                          <button
+                            type="button"
+                            disabled={testEmailLoading || !adminOverview.smtpConfigured}
+                            onClick={() => void handleSendTestEmail()}
+                            className="px-2.5 py-1 rounded-lg bg-white dark:bg-vscode-input hover:bg-slate-100 dark:hover:bg-vscode-hover border border-slate-200 dark:border-vscode-borderLight text-[11px] font-semibold text-slate-700 dark:text-vscode-textBright flex items-center gap-1.5 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                            title={
                               adminOverview.smtpConfigured
-                                ? 'text-emerald-600 dark:text-emerald-400'
-                                : 'text-amber-600 dark:text-amber-400'
+                                ? `Invia email di prova a ${adminOverview.adminEmail}`
+                                : 'Configura prima SMTP_USER e SMTP_PASS nei Secrets di AI Studio'
                             }
                           >
-                            {adminOverview.smtpConfigured ? 'Attive' : 'Non configurate'}
-                          </strong>
-                        </span>
-                        <span className="font-mono tabular-nums">
-                          Limite: {adminOverview.rateLimitPerMin} req/min
-                        </span>
+                            {testEmailLoading ? (
+                              <Loader2 className="w-3 h-3 animate-spin accent-icon" />
+                            ) : (
+                              <Send className="w-3 h-3 accent-icon" />
+                            )}
+                            <span>Invia email di test</span>
+                          </button>
+                        </div>
                       </div>
+
+                      {testEmailFeedback && (
+                        <div
+                          className={`p-2 rounded-lg border text-[11px] leading-relaxed ${
+                            testEmailFeedback.ok
+                              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
+                              : 'bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300'
+                          }`}
+                        >
+                          {testEmailFeedback.message}
+                        </div>
+                      )}
+
                       {!adminOverview.smtpConfigured && (
-                        <div className="text-[10px] leading-relaxed">
-                          Per ricevere automaticamente email con i pulsanti Approva/Rifiuta su{' '}
-                          <strong>{adminOverview.adminEmail}</strong>, aggiungi{' '}
-                          <code>SMTP_USER</code> e <code>SMTP_PASS</code> (App Password Gmail) nei Secrets di AI Studio.
+                        <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[10px] text-slate-700 dark:text-vscode-text leading-relaxed space-y-1">
+                          <div className="font-semibold text-amber-800 dark:text-amber-300">
+                            Checklist AI Studio Secrets per notifiche email a {adminOverview.adminEmail}:
+                          </div>
+                          <div>
+                            1. <code>SMTP_USER</code> = tuo indirizzo Gmail (es. <code>{adminOverview.adminEmail}</code>)
+                          </div>
+                          <div>
+                            2. <code>SMTP_PASS</code> = App Password Gmail a 16 caratteri (Account Google → Sicurezza → Password per le app)
+                          </div>
+                          <div>
+                            3. <code>APPROVAL_TOKEN_SECRET</code> = stringa casuale lunga per firmare i link
+                          </div>
+                          <div>
+                            4. <code>APP_URL</code> = URL condiviso dell&apos;app (senza slash finale) per link diretti &amp; sync Cloud Firestore
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1175,6 +1365,7 @@ export const KeybindingsModal: React.FC<KeybindingsModalProps> = ({ open, onClos
     { label: 'Command Palette rapida', keys: 'Ctrl + K' },
     { label: 'Command Palette alternativa', keys: 'Ctrl + Shift + P' },
     { label: 'Filtro materie in Command Palette', keys: '>u' },
+    { label: 'Ripristina finestra massimizzata / Chiudi finestre', keys: 'Esc' },
   ];
 
   return (
@@ -1253,6 +1444,9 @@ interface CommandPaletteModalProps {
   onCreateQuiz: () => void;
   onOpenSettings: () => void;
   onSelectSubject: (subjectId: string) => void;
+  onApplyLayoutPreset: (presetId: LayoutPresetId) => void;
+  onToggleCollapseExplorer: () => void;
+  onRestoreDefaultLayout: () => void;
 }
 
 export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
@@ -1271,6 +1465,9 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
   onCreateQuiz,
   onOpenSettings,
   onSelectSubject,
+  onApplyLayoutPreset,
+  onToggleCollapseExplorer,
+  onRestoreDefaultLayout,
 }) => {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -1379,6 +1576,27 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         icon: <SlidersHorizontal className="w-3.5 h-3.5 text-slate-500" />,
         run: onOpenSettings,
       },
+      ...LAYOUT_PRESETS.map((preset) => ({
+        id: `preset_${preset.id}`,
+        label: `Layout: ${preset.label} (${preset.description})`,
+        hint: 'Layout',
+        icon: <LayoutGrid className="w-3.5 h-3.5 accent-icon" />,
+        run: () => onApplyLayoutPreset(preset.id),
+      })),
+      {
+        id: 'toggle_explorer',
+        label: 'Comprimi / Espandi Explorer',
+        hint: 'Layout',
+        icon: <PanelLeftClose className="w-3.5 h-3.5 text-amber-500" />,
+        run: onToggleCollapseExplorer,
+      },
+      {
+        id: 'restore_layout',
+        label: 'Ripristina Layout Predefinito',
+        hint: 'Layout',
+        icon: <RotateCcw className="w-3.5 h-3.5 text-slate-500" />,
+        run: onRestoreDefaultLayout,
+      },
       ...subjects.map((s) => ({
         id: `switch_${s.id}`,
         label: `Cambia materia → ${s.name}`,
@@ -1415,6 +1633,9 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
     onCreateQuiz,
     onOpenSettings,
     onSelectSubject,
+    onApplyLayoutPreset,
+    onToggleCollapseExplorer,
+    onRestoreDefaultLayout,
   ]);
 
   useEffect(() => {

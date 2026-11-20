@@ -8,6 +8,9 @@ import {
   Info,
   ListChecks,
   Loader2,
+  Maximize2,
+  Minimize2,
+  PanelTop,
   RotateCw,
   Sparkles,
   Trash2,
@@ -27,12 +30,13 @@ import type {
   AiResponseLanguage,
   GeminiModelId,
   Note,
+  PanelWindowActions,
   Quiz,
   QuizQuestion,
   StudyDifficulty,
 } from '../types';
 
-interface QuizPanelProps {
+interface QuizPanelProps extends PanelWindowActions {
   activeNote: Note | null;
   subjectName: string;
   geminiModel: GeminiModelId;
@@ -80,6 +84,12 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
   onToast,
   onHeaderDragStart,
   onHeaderDragEnd,
+  hideWindowHeader = false,
+  iconOnlyHeader = false,
+  isMaximized = false,
+  onToggleMaximize,
+  onClosePanel,
+  onSwitchToTabs,
 }) => {
   const [viewMode, setViewMode] = useState<'active' | 'history'>('active');
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
@@ -339,18 +349,65 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-slate-50 dark:bg-vscode-sidebar overflow-hidden">
-      <div
-        draggable
-        onDragStart={onHeaderDragStart}
-        onDragEnd={onHeaderDragEnd}
-        className="window-header h-9 px-3 border-b border-slate-200 dark:border-vscode-border flex justify-between items-center bg-slate-200/80 dark:bg-vscode-border flex-none cursor-grab"
-      >
-        <span className="font-mono text-[11px] font-semibold tracking-wider text-slate-500 dark:text-vscode-textMuted uppercase flex items-center gap-1.5">
-          <GripVertical className="w-3 h-3 text-slate-400" />
-          <ListChecks className="w-3 h-3 text-indigo-500" />
-          <span>Quiz</span>
-        </span>
-      </div>
+      {!hideWindowHeader && (
+        <div
+          draggable
+          onDragStart={onHeaderDragStart}
+          onDragEnd={onHeaderDragEnd}
+          className="window-header h-9 px-3 border-b border-slate-200 dark:border-vscode-border flex justify-between items-center bg-slate-200/80 dark:bg-vscode-border flex-none cursor-grab"
+        >
+          <span
+            title="Quiz"
+            className="font-mono text-[11px] font-semibold tracking-wider text-slate-500 dark:text-vscode-textMuted uppercase flex items-center gap-1.5 min-w-0"
+          >
+            <GripVertical className="w-3 h-3 text-slate-400 shrink-0" />
+            <ListChecks className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+            {!iconOnlyHeader && <span className="truncate">Quiz</span>}
+          </span>
+          <div
+            className="flex items-center gap-0.5 shrink-0"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {onSwitchToTabs && !isMaximized && (
+              <button
+                type="button"
+                draggable={false}
+                onClick={onSwitchToTabs}
+                className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+                title="Raggruppa in schede compatte"
+              >
+                <PanelTop className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {onToggleMaximize && (
+              <button
+                type="button"
+                draggable={false}
+                onClick={onToggleMaximize}
+                className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+                title={isMaximized ? 'Ripristina finestra (Esc)' : 'Massimizza finestra'}
+              >
+                {isMaximized ? (
+                  <Minimize2 className="w-3.5 h-3.5" />
+                ) : (
+                  <Maximize2 className="w-3.5 h-3.5" />
+                )}
+              </button>
+            )}
+            {onClosePanel && !isMaximized && (
+              <button
+                type="button"
+                draggable={false}
+                onClick={onClosePanel}
+                className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-red-500 hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+                title="Chiudi pannello"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Controls Bar */}
       <div className="p-2 border-b border-slate-200 dark:border-vscode-border bg-slate-100 dark:bg-vscode-tabInactive flex items-center gap-1.5 flex-none justify-between">

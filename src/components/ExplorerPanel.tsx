@@ -10,6 +10,11 @@ import {
   FolderTree,
   GripVertical,
   Loader2,
+  Maximize2,
+  Minimize2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelTop,
   Pencil,
   Plus,
   Presentation,
@@ -20,14 +25,15 @@ import {
 } from 'lucide-react';
 import { formatFileSize } from '../utils/documentParser';
 import { stripHtml } from '../utils/exporters';
-import type { Folder, Note, StudyFile } from '../types';
+import type { Folder, Note, PanelWindowActions, StudyFile } from '../types';
 
-interface ExplorerPanelProps {
+interface ExplorerPanelProps extends PanelWindowActions {
   folders: Folder[];
   notes: Note[];
   studyFiles: StudyFile[];
   activeNoteId: string | null;
   activeSlideFileId: string | null;
+  collapsed?: boolean;
   onOpenNote: (noteId: string) => void;
   onOpenStudyFile: (file: StudyFile) => void;
   onCreateNote: (folderId?: string | null) => Promise<string | null>;
@@ -77,6 +83,14 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
   onHeaderDragEnd,
   isMobileDrawer = false,
   onCloseMobileDrawer,
+  collapsed = false,
+  hideWindowHeader = false,
+  iconOnlyHeader = false,
+  isMaximized = false,
+  onToggleMaximize,
+  onClosePanel,
+  onToggleCollapseExplorer,
+  onSwitchToTabs,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -97,6 +111,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
   >(null);
 
   const editInputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const folderClickTimerRef = useRef<number | null>(null);
 
@@ -428,38 +443,197 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
   const rootNotes = filteredNotes.filter((n) => !n.folderId);
   const rootFiles = filteredStudyFiles.filter((f) => !f.folderId);
 
+  if (collapsed && !isMobileDrawer && !hideWindowHeader && !isMaximized) {
+    return (
+      <div className="flex flex-col items-center h-full bg-slate-50 dark:bg-vscode-sidebar overflow-hidden py-1.5 gap-1.5 select-none">
+        <button
+          type="button"
+          onClick={() => onToggleCollapseExplorer?.()}
+          className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-hover transition cursor-pointer"
+          title="Espandi Explorer"
+          aria-label="Espandi Explorer"
+        >
+          <PanelLeftOpen className="w-4 h-4 accent-icon" />
+        </button>
+
+        <div className="w-5 h-px bg-slate-200 dark:bg-vscode-borderLight" />
+
+        <button
+          type="button"
+          onClick={() => {
+            onToggleCollapseExplorer?.();
+            window.setTimeout(() => searchInputRef.current?.focus(), 60);
+          }}
+          className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 dark:text-vscode-textMuted hover:bg-slate-200 dark:hover:bg-vscode-hover hover:text-slate-800 dark:hover:text-white transition cursor-pointer"
+          title="Cerca appunti o file"
+        >
+          <Search className="w-4 h-4" />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            onToggleCollapseExplorer?.();
+            void handleCreateNoteClick(null);
+          }}
+          className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 dark:text-vscode-textMuted hover:bg-slate-200 dark:hover:bg-vscode-hover hover:text-slate-800 dark:hover:text-white transition cursor-pointer"
+          title="Nuovo File (Alt+N)"
+        >
+          <FilePlus2 className="w-4 h-4" />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            onToggleCollapseExplorer?.();
+            void handleCreateFolderClick();
+          }}
+          className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 dark:text-vscode-textMuted hover:bg-slate-200 dark:hover:bg-vscode-hover hover:text-slate-800 dark:hover:text-white transition cursor-pointer"
+          title="Nuova Cartella"
+        >
+          <FolderPlus className="w-4 h-4" />
+        </button>
+
+        <button
+          type="button"
+          disabled={uploading}
+          onClick={() => uploadInputRef.current?.click()}
+          className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 dark:text-vscode-textMuted hover:bg-slate-200 dark:hover:bg-vscode-hover hover:text-slate-800 dark:hover:text-white transition cursor-pointer disabled:opacity-50"
+          title="Carica PDF, DOCX o PPTX (max 5MB)"
+        >
+          {uploading ? (
+            <Loader2 className="w-4 h-4 animate-spin accent-icon" />
+          ) : (
+            <Upload className="w-4 h-4" />
+          )}
+        </button>
+
+        <input
+          ref={uploadInputRef}
+          type="file"
+          accept=".pdf,.docx,.pptx"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            void handleUploadTrigger(e.target.files, null);
+            e.target.value = '';
+          }}
+        />
+
+        <div className="mt-auto pb-1 flex flex-col items-center gap-1">
+          <span
+            className="text-[10px] font-mono tabular-nums text-slate-400 dark:text-vscode-textMuted"
+            title={`${notes.length} note · ${studyFiles.length} file`}
+          >
+            {notes.length + studyFiles.length}
+          </span>
+          {onClosePanel && (
+            <button
+              type="button"
+              onClick={onClosePanel}
+              className="w-7 h-7 flex items-center justify-center rounded-md text-slate-400 hover:text-red-500 hover:bg-slate-200 dark:hover:bg-vscode-hover transition cursor-pointer"
+              title="Nascondi Explorer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full bg-slate-50 dark:bg-vscode-sidebar overflow-hidden">
       {/* Header */}
-      <div
-        draggable={!isMobileDrawer}
-        onDragStart={onHeaderDragStart}
-        onDragEnd={onHeaderDragEnd}
-        className={`window-header h-9 px-3 border-b border-slate-200 dark:border-vscode-border flex justify-between items-center bg-slate-200/80 dark:bg-vscode-border flex-none ${
-          isMobileDrawer ? '' : 'cursor-grab'
-        }`}
-      >
-        <span className="font-mono text-[11px] font-semibold tracking-wider text-slate-500 dark:text-vscode-textMuted uppercase flex items-center gap-1.5">
-          {!isMobileDrawer && <GripVertical className="w-3 h-3 text-slate-400" />}
-          <FolderTree className="w-3 h-3 text-amber-500" />
-          <span>Explorer</span>
-        </span>
-        {isMobileDrawer && onCloseMobileDrawer && (
-          <button
-            type="button"
-            onClick={onCloseMobileDrawer}
-            className="w-7 h-7 flex items-center justify-center rounded-md text-slate-500 hover:text-slate-800 dark:hover:text-white cursor-pointer"
-            aria-label="Chiudi Explorer"
+      {!hideWindowHeader && (
+        <div
+          draggable={!isMobileDrawer}
+          onDragStart={onHeaderDragStart}
+          onDragEnd={onHeaderDragEnd}
+          className={`window-header h-9 px-3 border-b border-slate-200 dark:border-vscode-border flex justify-between items-center bg-slate-200/80 dark:bg-vscode-border flex-none ${
+            isMobileDrawer ? '' : 'cursor-grab'
+          }`}
+        >
+          <span
+            title="Explorer"
+            className="font-mono text-[11px] font-semibold tracking-wider text-slate-500 dark:text-vscode-textMuted uppercase flex items-center gap-1.5 min-w-0"
           >
-            <X className="w-4 h-4" />
-          </button>
-        )}
-      </div>
+            {!isMobileDrawer && <GripVertical className="w-3 h-3 text-slate-400 shrink-0" />}
+            <FolderTree className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+            {!iconOnlyHeader && <span className="truncate">Explorer</span>}
+          </span>
+          {isMobileDrawer && onCloseMobileDrawer ? (
+            <button
+              type="button"
+              onClick={onCloseMobileDrawer}
+              className="w-7 h-7 flex items-center justify-center rounded-md text-slate-500 hover:text-slate-800 dark:hover:text-white cursor-pointer"
+              aria-label="Chiudi Explorer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          ) : (
+            <div
+              className="flex items-center gap-0.5 shrink-0"
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              {onSwitchToTabs && !isMaximized && (
+                <button
+                  type="button"
+                  draggable={false}
+                  onClick={onSwitchToTabs}
+                  className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+                  title="Raggruppa in schede compatte"
+                >
+                  <PanelTop className="w-3.5 h-3.5" />
+                </button>
+              )}
+              {onToggleCollapseExplorer && !isMaximized && (
+                <button
+                  type="button"
+                  draggable={false}
+                  onClick={onToggleCollapseExplorer}
+                  className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+                  title="Comprimi Explorer in barra laterale"
+                >
+                  <PanelLeftClose className="w-3.5 h-3.5" />
+                </button>
+              )}
+              {onToggleMaximize && (
+                <button
+                  type="button"
+                  draggable={false}
+                  onClick={onToggleMaximize}
+                  className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+                  title={isMaximized ? 'Ripristina finestra (Esc)' : 'Massimizza finestra'}
+                >
+                  {isMaximized ? (
+                    <Minimize2 className="w-3.5 h-3.5" />
+                  ) : (
+                    <Maximize2 className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              )}
+              {onClosePanel && !isMaximized && (
+                <button
+                  type="button"
+                  draggable={false}
+                  onClick={onClosePanel}
+                  className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-red-500 hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+                  title="Chiudi pannello"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Search & Creation Bar */}
       <div className="p-2 border-b border-slate-200 dark:border-vscode-border flex items-center gap-1 flex-none">
         <div className="relative flex-1 min-w-0">
           <input
+            ref={searchInputRef}
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}

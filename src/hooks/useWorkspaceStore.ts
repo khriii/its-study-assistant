@@ -35,6 +35,7 @@ import {
   DEFAULT_EDITOR_LINE_HEIGHT,
   DEFAULT_FLASHCARD_COUNT,
   DEFAULT_GEMINI_MODEL,
+  DEFAULT_PANEL_COLUMNS,
   DEFAULT_PANEL_ORDER,
   DEFAULT_PANEL_WIDTHS,
   DEFAULT_QUIZ_COUNT,
@@ -43,9 +44,11 @@ import {
   DEFAULT_SUBJECT_NAME,
   DEFAULT_SUBJECT_PROMPT,
   DEFAULT_THEME_MODE,
+  DEFAULT_WINDOW_HEADER_LABEL_MODE,
   DEFAULT_WINDOW_VISIBILITY,
   INITIAL_SAMPLE_NOTE_HTML,
   INITIAL_SAMPLE_NOTE_TITLE,
+  LAYOUT_PRESETS,
 } from '../constants/defaults';
 import {
   arrayBufferToBase64,
@@ -59,16 +62,25 @@ import {
   saveCodeColors,
   type CodeColorScheme,
 } from '../utils/codeSyntax';
-import { fetchAiAccessStatus, requestAiAccessApi } from '../utils/aiApi';
+import {
+  ADMIN_EMAIL_ADDRESS,
+  fetchAiAccessStatus,
+  requestAiAccessApi,
+  subscribeAdminPendingRequests,
+  verifyAndSyncDecisionTokenApi,
+} from '../utils/aiApi';
 import type {
   AiAccessRequestResult,
   AiAccessStatus,
+  AiPendingRequest,
   AiResponseLanguage,
   AiResponseStyle,
   Flashcard,
   Folder,
   GeminiModelId,
+  LayoutPresetId,
   Note,
+  PanelColumnGroup,
   Quiz,
   QuizQuestion,
   StudyDifficulty,
@@ -76,9 +88,74 @@ import type {
   Subject,
   ThemeMode,
   ToastItem,
+  WindowHeaderLabelMode,
   WindowId,
   WorkspacePreferences,
 } from '../types';
+
+const ALL_WINDOW_IDS: WindowId[] = [
+  'sidebar',
+  'pdf-viewer-panel',
+  'left-panel',
+  'flashcards-panel',
+  'quiz-panel',
+  'right-panel',
+];
+
+function isValidWindowId(val: unknown): val is WindowId {
+  return typeof val === 'string' && ALL_WINDOW_IDS.includes(val as WindowId);
+}
+
+export function normalizePanelColumns(raw?: unknown): PanelColumnGroup[] {
+  const seen = new Set<WindowId>();
+  const groups: PanelColumnGroup[] = [];
+
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue;
+      const typed = item as PanelColumnGroup;
+      const candidatePanels = Array.isArray(typed.panels)
+        ? typed.panels.filter((id): id is WindowId => isValidWindowId(id) && !seen.has(id))
+        : [];
+      if (candidatePanels.length === 0) continue;
+      candidatePanels.forEach((id) => seen.add(id));
+      const rawActive = typed.activeTab;
+      const activeTab = isValidWindowId(rawActive) && candidatePanels.includes(rawActive)
+        ? rawActive
+        : candidatePanels[0];
+
+      const group: PanelColumnGroup = { panels: candidatePanels, activeTab };
+      if (typed.layout === 'vertical' || typed.layout === 'tabs') {
+        group.layout = typed.layout;
+      }
+      if (typeof typed.width === 'number' && Number.isFinite(typed.width)) {
+        group.width = Math.max(180, Math.min(900, Math.round(typed.width)));
+      }
+      if (typed.heights && typeof typed.heights === 'object') {
+        const cleanHeights: Record<string, number> = {};
+        let hasAny = false;
+        for (const pId of candidatePanels) {
+          const val = (typed.heights as Record<string, unknown>)[pId];
+          if (typeof val === 'number' && Number.isFinite(val) && val > 0) {
+            cleanHeights[pId] = Math.round(val * 100) / 100;
+            hasAny = true;
+          }
+        }
+        if (hasAny) group.heights = cleanHeights;
+      }
+      groups.push(group);
+    }
+  }
+
+  for (const id of ALL_WINDOW_IDS) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      groups.push({ panels: [id], activeTab: id });
+    }
+  }
+
+  return groups;
+}
 
 function makeSafeId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 8);
@@ -141,8 +218,15 @@ export function useWorkspaceStore() {
     DEFAULT_PANEL_WIDTHS,
   );
   const [panelOrder, setPanelOrderState] = useState<WindowId[]>(DEFAULT_PANEL_ORDER);
+  const [panelColumns, setPanelColumnsState] = useState<PanelColumnGroup[]>(DEFAULT_PANEL_COLUMNS);
+  const [collapsedExplorer, setCollapsedExplorerState] = useState<boolean>(false);
+  const [activeLayoutPreset, setActiveLayoutPresetState] = useState<LayoutPresetId | null>('studio-base');
+  const [windowHeaderLabelMode, setWindowHeaderLabelModeState] = useState<WindowHeaderLabelMode>(
+    DEFAULT_WINDOW_HEADER_LABEL_MODE,
+  );
   const [aiAccessStatus, setAiAccessStatus] = useState<AiAccessStatus | null>(null);
   const [aiAccessLoading, setAiAccessLoading] = useState<boolean>(false);
+  const [pendingAdminRequests, setPendingAdminRequests] = useState<AiPendingRequest[]>([]);
 
   const [saveStatus, setSaveStatus] = useState<'Salvato' | 'Salvataggio...'>('Salvato');
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -161,6 +245,7 @@ export function useWorkspaceStore() {
   const noteSaveTimerRef = useRef<number | null>(null);
   const pendingSaveNoteIdRef = useRef<string | null>(null);
   const studyFileCacheRef = useRef<Map<string, string>>(new Map());
+  const decisionTokenProcessedRef = useRef<boolean>(false);
 
   if (fatalError) {
     throw fatalError;
@@ -227,6 +312,73 @@ export function useWorkspaceStore() {
     [refreshAiAccess, showToast],
   );
 
+  const isAiAdmin = (user?.email || '').trim().toLowerCase() === ADMIN_EMAIL_ADDRESS;
+
+  // Real-time Firestore listener for Admin pending AI access requests across all environments
+  useEffect(() => {
+    if (!user || !isAiAdmin) {
+      setPendingAdminRequests([]);
+      return undefined;
+    }
+    let initialized = false;
+    let knownEmails = new Set<string>();
+    const unsub = subscribeAdminPendingRequests((requests) => {
+      if (initialized) {
+        const newlyAdded = requests.filter((r) => !knownEmails.has(r.email));
+        if (newlyAdded.length > 0) {
+          showToast(
+            `Nuova richiesta accesso AI da ${newlyAdded[0].email} (apri Impostazioni per approvare).`,
+            'info',
+          );
+        }
+      }
+      initialized = true;
+      knownEmails = new Set(requests.map((r) => r.email));
+      setPendingAdminRequests(requests);
+    });
+    return () => unsub();
+  }, [user, isAiAdmin, showToast]);
+
+  // Sync email decision token (?aiDecisionToken=...) into Firestore when Admin opens the link
+  useEffect(() => {
+    if (!user || !isAiAdmin || decisionTokenProcessedRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('aiDecisionToken');
+    if (!token) return;
+
+    decisionTokenProcessedRef.current = true;
+    params.delete('aiDecisionToken');
+    const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`;
+    window.history.replaceState({}, '', nextUrl);
+
+    void (async () => {
+      try {
+        const result = await verifyAndSyncDecisionTokenApi(token);
+        showToast(
+          result.action === 'approve'
+            ? `Accesso AI per ${result.email} sincronizzato su Cloud Firestore!`
+            : `Rifiuto per ${result.email} sincronizzato su Cloud Firestore.`,
+          result.action === 'approve' ? 'success' : 'info',
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Token email non valido o scaduto.';
+        showToast(`Sincronizzazione decisione email fallita: ${msg}`, 'error');
+      }
+    })();
+  }, [user, isAiAdmin, showToast]);
+
+  // Auto-refresh pending user's AI access when returning to the tab
+  useEffect(() => {
+    if (!user || !aiAccessStatus || aiAccessStatus.authorized || !aiAccessStatus.pending) {
+      return undefined;
+    }
+    const handleFocus = () => {
+      void refreshAiAccess();
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [user, aiAccessStatus, refreshAiAccess]);
+
   // Auth listener
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (firebaseUser) => {
@@ -250,6 +402,7 @@ export function useWorkspaceStore() {
         setActiveNoteIdState(null);
         setOpenTabsState([]);
         setAiAccessStatus(null);
+        setPendingAdminRequests([]);
       } else {
         void refreshAiAccess();
       }
@@ -333,6 +486,10 @@ export function useWorkspaceStore() {
             windowVisibility: DEFAULT_WINDOW_VISIBILITY,
             panelWidths: DEFAULT_PANEL_WIDTHS,
             panelOrder: DEFAULT_PANEL_ORDER,
+            panelColumns: DEFAULT_PANEL_COLUMNS,
+            collapsedExplorer: false,
+            activeLayoutPreset: 'studio-base',
+            windowHeaderLabelMode: DEFAULT_WINDOW_HEADER_LABEL_MODE,
             updatedAt: serverTimestamp(),
           });
 
@@ -357,6 +514,10 @@ export function useWorkspaceStore() {
             windowVisibility: DEFAULT_WINDOW_VISIBILITY,
             panelWidths: DEFAULT_PANEL_WIDTHS,
             panelOrder: DEFAULT_PANEL_ORDER,
+            panelColumns: DEFAULT_PANEL_COLUMNS,
+            collapsedExplorer: false,
+            activeLayoutPreset: 'studio-base',
+            windowHeaderLabelMode: DEFAULT_WINDOW_HEADER_LABEL_MODE,
             updatedAt: serverTimestamp(),
           });
         }
@@ -453,6 +614,22 @@ export function useWorkspaceStore() {
         }
         if (Array.isArray(data.panelOrder) && data.panelOrder.length === 6) {
           setPanelOrderState(data.panelOrder);
+        }
+        if (Array.isArray(data.panelColumns) && data.panelColumns.length > 0) {
+          setPanelColumnsState(normalizePanelColumns(data.panelColumns));
+        }
+        if (typeof data.collapsedExplorer === 'boolean') {
+          setCollapsedExplorerState(data.collapsedExplorer);
+        }
+        if (data.activeLayoutPreset !== undefined) {
+          setActiveLayoutPresetState(data.activeLayoutPreset ?? null);
+        }
+        if (
+          data.windowHeaderLabelMode === 'always' ||
+          data.windowHeaderLabelMode === 'auto' ||
+          data.windowHeaderLabelMode === 'icons-only'
+        ) {
+          setWindowHeaderLabelModeState(data.windowHeaderLabelMode);
         }
       },
       handleSnapError(`users/${uid}/preferences/workspace`),
@@ -644,6 +821,17 @@ export function useWorkspaceStore() {
               windowVisibility: partial.windowVisibility ?? windowVisibility,
               panelWidths: partial.panelWidths ?? panelWidths,
               panelOrder: partial.panelOrder ?? panelOrder,
+              panelColumns: partial.panelColumns ?? panelColumns,
+              collapsedExplorer:
+                partial.collapsedExplorer !== undefined
+                  ? partial.collapsedExplorer
+                  : collapsedExplorer,
+              activeLayoutPreset:
+                partial.activeLayoutPreset !== undefined
+                  ? partial.activeLayoutPreset
+                  : activeLayoutPreset,
+              windowHeaderLabelMode:
+                partial.windowHeaderLabelMode ?? windowHeaderLabelMode,
               updatedAt: serverTimestamp(),
             },
             { merge: true },
@@ -671,6 +859,10 @@ export function useWorkspaceStore() {
       windowVisibility,
       panelWidths,
       panelOrder,
+      panelColumns,
+      collapsedExplorer,
+      activeLayoutPreset,
+      windowHeaderLabelMode,
     ],
   );
 
@@ -710,6 +902,7 @@ export function useWorkspaceStore() {
       autoShowQuizExplanations: boolean;
       editorFontSize: number;
       editorLineHeight: number;
+      windowHeaderLabelMode: WindowHeaderLabelMode;
     }) => {
       const fcCount = Math.max(3, Math.min(10, Math.round(next.defaultFlashcardCount)));
       const qCount = Math.max(1, Math.min(20, Math.round(next.defaultQuizCount)));
@@ -725,6 +918,7 @@ export function useWorkspaceStore() {
       setAutoShowQuizExplanationsState(next.autoShowQuizExplanations);
       setEditorFontSizeState(fontSz);
       setEditorLineHeightState(lineH);
+      setWindowHeaderLabelModeState(next.windowHeaderLabelMode);
 
       void updatePreferences({
         geminiModel: next.geminiModel,
@@ -736,6 +930,7 @@ export function useWorkspaceStore() {
         autoShowQuizExplanations: next.autoShowQuizExplanations,
         editorFontSize: fontSz,
         editorLineHeight: lineH,
+        windowHeaderLabelMode: next.windowHeaderLabelMode,
       });
       showToast('Impostazioni salvate.', 'success');
     },
@@ -743,9 +938,16 @@ export function useWorkspaceStore() {
   );
 
   const setWindowVisibility = useCallback(
-    (next: Record<WindowId, boolean>) => {
+    (next: Record<WindowId, boolean>, clearPreset = true) => {
       setWindowVisibilityState(next);
-      void updatePreferences({ windowVisibility: next });
+      if (clearPreset) {
+        setActiveLayoutPresetState(null);
+      }
+      void updatePreferences(
+        clearPreset
+          ? { windowVisibility: next, activeLayoutPreset: null }
+          : { windowVisibility: next },
+      );
     },
     [updatePreferences],
   );
@@ -764,6 +966,70 @@ export function useWorkspaceStore() {
     (next: WindowId[]) => {
       setPanelOrderState(next);
       void updatePreferences({ panelOrder: next });
+    },
+    [updatePreferences],
+  );
+
+  const setPanelColumns = useCallback(
+    (next: PanelColumnGroup[], clearPreset = true) => {
+      const normalized = normalizePanelColumns(next);
+      setPanelColumnsState(normalized);
+      if (clearPreset) {
+        setActiveLayoutPresetState(null);
+      }
+      void updatePreferences(
+        clearPreset
+          ? { panelColumns: normalized, activeLayoutPreset: null }
+          : { panelColumns: normalized },
+      );
+    },
+    [updatePreferences],
+  );
+
+  const setCollapsedExplorer = useCallback(
+    (collapsed: boolean, clearPreset = false) => {
+      setCollapsedExplorerState(collapsed);
+      if (clearPreset) {
+        setActiveLayoutPresetState(null);
+      }
+      void updatePreferences(
+        clearPreset
+          ? { collapsedExplorer: collapsed, activeLayoutPreset: null }
+          : { collapsedExplorer: collapsed },
+      );
+    },
+    [updatePreferences],
+  );
+
+  const applyLayoutPreset = useCallback(
+    (presetId: LayoutPresetId) => {
+      const preset = LAYOUT_PRESETS.find((p) => p.id === presetId);
+      if (!preset) return;
+      const nextVis = { ...preset.windowVisibility };
+      const nextCols = normalizePanelColumns(preset.panelColumns);
+      setWindowVisibilityState(nextVis);
+      setPanelColumnsState(nextCols);
+      setCollapsedExplorerState(preset.collapsedExplorer);
+      setActiveLayoutPresetState(preset.id);
+      void updatePreferences({
+        windowVisibility: nextVis,
+        panelColumns: nextCols,
+        collapsedExplorer: preset.collapsedExplorer,
+        activeLayoutPreset: preset.id,
+      });
+    },
+    [updatePreferences],
+  );
+
+  const setActiveColumnTab = useCallback(
+    (colIndex: number, panelId: WindowId) => {
+      setPanelColumnsState((prev) => {
+        const next = prev.map((col, idx) =>
+          idx === colIndex && col.panels.includes(panelId) ? { ...col, activeTab: panelId } : col,
+        );
+        void updatePreferences({ panelColumns: next });
+        return next;
+      });
     },
     [updatePreferences],
   );
@@ -2194,6 +2460,10 @@ export function useWorkspaceStore() {
     windowVisibility,
     panelWidths,
     panelOrder,
+    panelColumns,
+    collapsedExplorer,
+    activeLayoutPreset,
+    windowHeaderLabelMode,
     saveStatus,
     toasts,
     hasLegacyBackup,
@@ -2205,6 +2475,10 @@ export function useWorkspaceStore() {
     setWindowVisibility,
     setPanelWidths,
     setPanelOrder,
+    setPanelColumns,
+    setCollapsedExplorer,
+    applyLayoutPreset,
+    setActiveColumnTab,
     selectSubject,
     createSubject,
     updateSubject,
@@ -2239,6 +2513,8 @@ export function useWorkspaceStore() {
     dismissLegacyBanner: () => setHasLegacyBackup(false),
     aiAccessStatus,
     aiAccessLoading,
+    isAiAdmin,
+    pendingAdminRequests,
     refreshAiAccess,
     requestAiAccess,
   };

@@ -44,26 +44,40 @@ interface VerifiedCaller {
   uid: string;
   email: string;
   displayName: string;
+  idToken: string;
 }
 
-function resolveFirebaseProjectId(): string {
-  const fromEnv = (process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '').trim();
-  if (fromEnv) return fromEnv;
+function resolveFirebaseConfig(): { projectId: string; firestoreDatabaseId: string } {
+  let projectId = (process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '').trim();
+  let firestoreDatabaseId = (process.env.FIREBASE_DATABASE_ID || '').trim();
   try {
     const configPath = path.resolve(__dirname, 'firebase-applet-config.json');
     if (fs.existsSync(configPath)) {
-      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8')) as { projectId?: unknown };
-      if (typeof parsed.projectId === 'string' && parsed.projectId.trim()) {
-        return parsed.projectId.trim();
+      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8')) as {
+        projectId?: unknown;
+        firestoreDatabaseId?: unknown;
+      };
+      if (!projectId && typeof parsed.projectId === 'string' && parsed.projectId.trim()) {
+        projectId = parsed.projectId.trim();
+      }
+      if (
+        !firestoreDatabaseId &&
+        typeof parsed.firestoreDatabaseId === 'string' &&
+        parsed.firestoreDatabaseId.trim()
+      ) {
+        firestoreDatabaseId = parsed.firestoreDatabaseId.trim();
       }
     }
   } catch (err) {
     console.warn('Impossibile leggere firebase-applet-config.json:', err);
   }
-  return '';
+  return {
+    projectId,
+    firestoreDatabaseId: firestoreDatabaseId || '(default)',
+  };
 }
 
-const firebaseProjectId = resolveFirebaseProjectId();
+const { projectId: firebaseProjectId, firestoreDatabaseId } = resolveFirebaseConfig();
 const firebaseAdminApp = firebaseProjectId
   ? getApps().length > 0
     ? getApp()
@@ -134,6 +148,38 @@ function isEmailAuthorized(email: string, store: AiAccessStore): boolean {
   if (normalized === ADMIN_EMAIL) return true;
   if (ENV_ALLOWED_EMAILS.has(normalized)) return true;
   return store.approvedEmails.includes(normalized);
+}
+
+function hashEmailForDocId(email: string): string {
+  return crypto.createHash('sha256').update(normalizeEmail(email)).digest('hex');
+}
+
+async function isAuthorizedInFirestore(email: string, idToken: string): Promise<boolean> {
+  const normalized = normalizeEmail(email);
+  if (!normalized || !firebaseProjectId || !firestoreDatabaseId || !idToken) return false;
+  try {
+    const docId = hashEmailForDocId(normalized);
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseProjectId)}/databases/${encodeURIComponent(firestoreDatabaseId)}/documents/aiAllowlist/${encodeURIComponent(docId)}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+      },
+    });
+    if (!res.ok) return false;
+    const data = (await res.json()) as {
+      fields?: {
+        approved?: { booleanValue?: boolean };
+        email?: { stringValue?: string };
+      };
+    };
+    return (
+      data.fields?.approved?.booleanValue === true &&
+      normalizeEmail(data.fields?.email?.stringValue) === normalized
+    );
+  } catch {
+    return false;
+  }
 }
 
 function createDecisionToken(email: string, action: 'approve' | 'reject'): string {
@@ -210,13 +256,7 @@ function resolvePublicBaseUrl(req: Request): string {
   return `${proto}://${host}`;
 }
 
-async function sendApprovalEmail(params: {
-  requesterEmail: string;
-  requesterName: string;
-  note: string;
-  approveUrl: string;
-  rejectUrl: string;
-}): Promise<void> {
+function createSmtpTransporter() {
   const host = (process.env.SMTP_HOST || 'smtp.gmail.com').trim();
   const port = Number(process.env.SMTP_PORT) || 465;
   const secureEnv = (process.env.SMTP_SECURE || '').trim().toLowerCase();
@@ -231,6 +271,47 @@ async function sendApprovalEmail(params: {
     secure,
     auth: { user, pass },
   });
+
+  return { transporter, from, host, port };
+}
+
+async function sendTestNotificationEmail(baseUrl: string): Promise<void> {
+  const { transporter, from, host, port } = createSmtpTransporter();
+  await transporter.verify();
+  const safeBase = escapeHtml(baseUrl);
+  await transporter.sendMail({
+    from,
+    to: ADMIN_EMAIL,
+    subject: `[ITS Study Assistant] Test Notifiche Email SMTP`,
+    text: `Configurazione SMTP verificata correttamente!\n\nQuando un nuovo studente richiederà l'accesso AI riceverai un'email con i pulsanti Approva / Rifiuta.\nWorkspace: ${baseUrl}`,
+    html: `
+      <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:12px;color:#0f172a;background:#ffffff;">
+        <div style="display:inline-block;padding:4px 10px;border-radius:6px;background:#059669;color:#ffffff;font-size:12px;font-weight:600;margin-bottom:12px;">
+          SMTP Attivo
+        </div>
+        <h2 style="margin:0 0 10px;font-size:18px;">Notifiche Email Configurate</h2>
+        <p style="margin:0 0 14px;font-size:14px;color:#475569;line-height:1.5;">
+          Il server <strong>ITS Universal Study Assistant</strong> ha inviato questa email di prova tramite <code>${escapeHtml(host)}:${port}</code>.
+        </p>
+        <p style="margin:0 0 18px;font-size:13px;color:#475569;line-height:1.5;">
+          I prossimi avvisi di richiesta accesso AI includeranno pulsanti diretti di approvazione sincronizzati con Cloud Firestore.
+        </p>
+        <a href="${safeBase}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600;font-size:13px;">
+          Apri Workspace
+        </a>
+      </div>
+    `,
+  });
+}
+
+async function sendApprovalEmail(params: {
+  requesterEmail: string;
+  requesterName: string;
+  note: string;
+  approveUrl: string;
+  rejectUrl: string;
+}): Promise<void> {
+  const { transporter, from } = createSmtpTransporter();
 
   const safeName = escapeHtml(params.requesterName || 'Utente Google');
   const safeEmail = escapeHtml(params.requesterEmail);
@@ -366,8 +447,9 @@ async function verifyFirebaseCaller(
   }
 
   try {
+    const idToken = match[1].trim();
     // 1-argument verifyIdToken works with zero IAM on Firebase Starter Tier
-    const decoded = await getAuth(firebaseAdminApp).verifyIdToken(match[1].trim());
+    const decoded = await getAuth(firebaseAdminApp).verifyIdToken(idToken);
     const email = normalizeEmail(decoded.email);
     if (!email || decoded.email_verified !== true) {
       res.status(401).json({
@@ -384,6 +466,7 @@ async function verifyFirebaseCaller(
       uid: decoded.uid,
       email,
       displayName,
+      idToken,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Token Firebase non valido o scaduto.';
@@ -400,7 +483,11 @@ async function requireAiAccess(req: Request, res: Response): Promise<VerifiedCal
   if (!caller) return null;
 
   const store = loadAccessStore();
-  if (!isEmailAuthorized(caller.email, store)) {
+  const authorized =
+    isEmailAuthorized(caller.email, store) ||
+    (await isAuthorizedInFirestore(caller.email, caller.idToken));
+
+  if (!authorized) {
     const pending = store.pendingRequests.some((r) => r.email === caller.email);
     const rejected = store.rejectedEmails.includes(caller.email);
     res.status(403).json({
@@ -610,9 +697,11 @@ async function startServer(): Promise<void> {
     if (!caller) return;
 
     const store = loadAccessStore();
-    const authorized = isEmailAuthorized(caller.email, store);
+    const authorized =
+      isEmailAuthorized(caller.email, store) ||
+      (await isAuthorizedInFirestore(caller.email, caller.idToken));
     const isAdmin = caller.email === ADMIN_EMAIL;
-    const pending = store.pendingRequests.some((r) => r.email === caller.email);
+    const pending = !authorized && store.pendingRequests.some((r) => r.email === caller.email);
     const rejected = !authorized && store.rejectedEmails.includes(caller.email);
 
     res.json({
@@ -633,7 +722,10 @@ async function startServer(): Promise<void> {
     if (!caller) return;
 
     const store = loadAccessStore();
-    if (isEmailAuthorized(caller.email, store)) {
+    if (
+      isEmailAuthorized(caller.email, store) ||
+      (await isAuthorizedInFirestore(caller.email, caller.idToken))
+    ) {
       res.json({
         ok: true,
         authorized: true,
@@ -766,6 +858,7 @@ async function startServer(): Promise<void> {
     const overview = buildAdminOverview(store);
     const actionLabel = parsed.action === 'approve' ? 'Accesso AI Approvato' : 'Richiesta Rifiutata';
     const accent = parsed.action === 'approve' ? '#059669' : '#dc2626';
+    const appSyncUrl = `${resolvePublicBaseUrl(req)}/?aiDecisionToken=${encodeURIComponent(rawToken)}`;
 
     res
       .status(200)
@@ -791,10 +884,18 @@ async function startServer(): Promise<void> {
             : "La richiesta è stata rifiutata. L'utente non potrà utilizzare le chiavi Gemini del server."
         }
       </p>
+      <div style="margin:0 0 18px;">
+        <a href="${escapeHtml(appSyncUrl)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600;font-size:13px;">
+          Apri Workspace &amp; Sincronizza su Cloud
+        </a>
+        <p style="margin:8px 0 0;font-size:12px;color:#64748b;">
+          Clicca il pulsante sopra per sincronizzare la decisione anche su Cloud Firestore per tutte le istanze dell&apos;app.
+        </p>
+      </div>
       ${
         overview.suggestedAllowedEnv
           ? `<div style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:12px;font-size:12px;">
-              <div style="font-weight:600;margin-bottom:6px;">Per rendere persistente la lista anche dopo un riavvio del container, aggiorna ALLOWED_USER_EMAILS nei Secrets:</div>
+              <div style="font-weight:600;margin-bottom:6px;">Backup opzionale per ALLOWED_USER_EMAILS nei Secrets:</div>
               <code style="word-break:break-all;font-family:monospace;">${escapeHtml(overview.suggestedAllowedEnv)}</code>
             </div>`
           : ''
@@ -814,6 +915,56 @@ async function startServer(): Promise<void> {
     }
     const store = loadAccessStore();
     res.json(buildAdminOverview(store));
+  });
+
+  app.post('/api/ai/admin/verify-decision-token', async (req, res) => {
+    const caller = await verifyFirebaseCaller(req, res);
+    if (!caller) return;
+    if (caller.email !== ADMIN_EMAIL) {
+      res.status(403).json({ error: 'Operazione riservata all\'amministratore.' });
+      return;
+    }
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+    const parsed = token ? verifyDecisionToken(token) : null;
+    if (!parsed) {
+      res.status(400).json({ error: 'Token di decisione email non valido o scaduto.' });
+      return;
+    }
+    const store = loadAccessStore();
+    applyAccessDecision(store, parsed.email, parsed.action);
+    res.json({ ok: true, email: parsed.email, action: parsed.action });
+  });
+
+  app.post('/api/ai/admin/test-email', async (req, res) => {
+    const caller = await verifyFirebaseCaller(req, res);
+    if (!caller) return;
+    if (caller.email !== ADMIN_EMAIL) {
+      res.status(403).json({ error: 'Operazione riservata all\'amministratore.' });
+      return;
+    }
+    if (!isSmtpConfigured()) {
+      res.status(400).json({
+        error: 'SMTP non configurato: aggiungi SMTP_USER e SMTP_PASS (App Password Gmail a 16 caratteri) nei Secrets di AI Studio.',
+        code: 'SMTP_NOT_CONFIGURED',
+      });
+      return;
+    }
+    const baseUrl = resolvePublicBaseUrl(req);
+    try {
+      await sendTestNotificationEmail(baseUrl);
+      res.json({
+        ok: true,
+        to: ADMIN_EMAIL,
+        baseUrl,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Errore SMTP sconosciuto.';
+      console.error('Errore test email SMTP:', err);
+      res.status(502).json({
+        error: `Invio test fallito (${msg}). Verifica che SMTP_PASS sia una App Password Google valida (senza spazi superflui) e che SMTP_USER corrisponda all'account Gmail.`,
+        code: 'SMTP_TEST_FAILED',
+      });
+    }
   });
 
   app.post('/api/ai/admin/decide', async (req, res) => {

@@ -102,6 +102,20 @@
         "panelOrder": {
           "type": "array"
         },
+        "panelColumns": {
+          "type": "array"
+        },
+        "collapsedExplorer": {
+          "type": "boolean"
+        },
+        "activeLayoutPreset": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "windowHeaderLabelMode": {
+          "type": "string",
+          "enum": ["always", "auto", "icons-only"]
+        },
         "updatedAt": {
           "type": "string",
           "format": "date-time"
@@ -461,6 +475,81 @@
         }
       },
       "required": ["id", "userId", "fileId", "index", "data"]
+    },
+    "AiAccessRequest": {
+      "title": "AiAccessRequest",
+      "description": "User request for Gemini AI access awaiting admin approval.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "rejected"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "displayName", "note", "status", "createdAt", "updatedAt"]
+    },
+    "AiAllowlistEntry": {
+      "title": "AiAllowlistEntry",
+      "description": "Admin-managed allowlist record granting Gemini AI access to a verified user email.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "approved": {
+          "type": "boolean"
+        },
+        "approvedBy": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "email", "approved", "approvedBy", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -499,6 +588,14 @@
     "/users/{userId}/fileChunks/{chunkId}": {
       "schema": { "$ref": "#/entities/FileChunk" },
       "description": "Base64 payload chunks for uploaded study documents."
+    },
+    "/aiAccessRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/AiAccessRequest" },
+      "description": "Per-user AI access approval requests synced across environments."
+    },
+    "/aiAllowlist/{emailHash}": {
+      "schema": { "$ref": "#/entities/AiAllowlistEntry" },
+      "description": "Admin-approved user emails authorized to call Gemini AI endpoints."
     }
   }
 }
