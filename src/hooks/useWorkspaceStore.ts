@@ -28,9 +28,17 @@ import {
   OperationType,
 } from '../firebase';
 import {
+  DEFAULT_AI_RESPONSE_LANGUAGE,
+  DEFAULT_AI_RESPONSE_STYLE,
+  DEFAULT_AUTO_SHOW_EXPLANATIONS,
+  DEFAULT_EDITOR_FONT_SIZE,
+  DEFAULT_EDITOR_LINE_HEIGHT,
+  DEFAULT_FLASHCARD_COUNT,
   DEFAULT_GEMINI_MODEL,
   DEFAULT_PANEL_ORDER,
   DEFAULT_PANEL_WIDTHS,
+  DEFAULT_QUIZ_COUNT,
+  DEFAULT_STUDY_DIFFICULTY,
   DEFAULT_SUBJECT_COLOR,
   DEFAULT_SUBJECT_NAME,
   DEFAULT_SUBJECT_PROMPT,
@@ -52,12 +60,15 @@ import {
   type CodeColorScheme,
 } from '../utils/codeSyntax';
 import type {
+  AiResponseLanguage,
+  AiResponseStyle,
   Flashcard,
   Folder,
   GeminiModelId,
   Note,
   Quiz,
   QuizQuestion,
+  StudyDifficulty,
   StudyFile,
   Subject,
   ThemeMode,
@@ -101,6 +112,22 @@ export function useWorkspaceStore() {
     return DEFAULT_THEME_MODE;
   });
   const [geminiModel, setGeminiModelState] = useState<GeminiModelId>(DEFAULT_GEMINI_MODEL);
+  const [aiResponseStyle, setAiResponseStyleState] = useState<AiResponseStyle>(DEFAULT_AI_RESPONSE_STYLE);
+  const [aiResponseLanguage, setAiResponseLanguageState] = useState<AiResponseLanguage>(
+    DEFAULT_AI_RESPONSE_LANGUAGE,
+  );
+  const [defaultFlashcardCount, setDefaultFlashcardCountState] = useState<number>(
+    DEFAULT_FLASHCARD_COUNT,
+  );
+  const [defaultQuizCount, setDefaultQuizCountState] = useState<number>(DEFAULT_QUIZ_COUNT);
+  const [studyDifficulty, setStudyDifficultyState] = useState<StudyDifficulty>(
+    DEFAULT_STUDY_DIFFICULTY,
+  );
+  const [autoShowQuizExplanations, setAutoShowQuizExplanationsState] = useState<boolean>(
+    DEFAULT_AUTO_SHOW_EXPLANATIONS,
+  );
+  const [editorFontSize, setEditorFontSizeState] = useState<number>(DEFAULT_EDITOR_FONT_SIZE);
+  const [editorLineHeight, setEditorLineHeightState] = useState<number>(DEFAULT_EDITOR_LINE_HEIGHT);
   const [currentSubjectId, setCurrentSubjectIdState] = useState<string | null>(null);
   const [activeNoteId, setActiveNoteIdState] = useState<string | null>(null);
   const [openTabs, setOpenTabsState] = useState<string[]>([]);
@@ -249,6 +276,14 @@ export function useWorkspaceStore() {
             userId: uid,
             themeMode,
             geminiModel: DEFAULT_GEMINI_MODEL,
+            aiResponseStyle: DEFAULT_AI_RESPONSE_STYLE,
+            aiResponseLanguage: DEFAULT_AI_RESPONSE_LANGUAGE,
+            defaultFlashcardCount: DEFAULT_FLASHCARD_COUNT,
+            defaultQuizCount: DEFAULT_QUIZ_COUNT,
+            studyDifficulty: DEFAULT_STUDY_DIFFICULTY,
+            autoShowQuizExplanations: DEFAULT_AUTO_SHOW_EXPLANATIONS,
+            editorFontSize: DEFAULT_EDITOR_FONT_SIZE,
+            editorLineHeight: DEFAULT_EDITOR_LINE_HEIGHT,
             currentSubjectId: subId,
             activeNoteId: noteId,
             openTabs: [noteId],
@@ -265,6 +300,14 @@ export function useWorkspaceStore() {
             userId: uid,
             themeMode,
             geminiModel: DEFAULT_GEMINI_MODEL,
+            aiResponseStyle: DEFAULT_AI_RESPONSE_STYLE,
+            aiResponseLanguage: DEFAULT_AI_RESPONSE_LANGUAGE,
+            defaultFlashcardCount: DEFAULT_FLASHCARD_COUNT,
+            defaultQuizCount: DEFAULT_QUIZ_COUNT,
+            studyDifficulty: DEFAULT_STUDY_DIFFICULTY,
+            autoShowQuizExplanations: DEFAULT_AUTO_SHOW_EXPLANATIONS,
+            editorFontSize: DEFAULT_EDITOR_FONT_SIZE,
+            editorLineHeight: DEFAULT_EDITOR_LINE_HEIGHT,
             currentSubjectId: firstSubId,
             activeNoteId: null,
             openTabs: [],
@@ -317,6 +360,45 @@ export function useWorkspaceStore() {
         const data = snap.data() as WorkspacePreferences;
         if (data.themeMode) setThemeModeState(data.themeMode);
         if (data.geminiModel) setGeminiModelState(data.geminiModel);
+        if (
+          data.aiResponseStyle === 'concise' ||
+          data.aiResponseStyle === 'standard' ||
+          data.aiResponseStyle === 'in-depth'
+        ) {
+          setAiResponseStyleState(data.aiResponseStyle);
+        }
+        if (data.aiResponseLanguage === 'it' || data.aiResponseLanguage === 'en') {
+          setAiResponseLanguageState(data.aiResponseLanguage);
+        }
+        if (
+          typeof data.defaultFlashcardCount === 'number' &&
+          Number.isFinite(data.defaultFlashcardCount)
+        ) {
+          setDefaultFlashcardCountState(
+            Math.max(3, Math.min(10, Math.round(data.defaultFlashcardCount))),
+          );
+        }
+        if (typeof data.defaultQuizCount === 'number' && Number.isFinite(data.defaultQuizCount)) {
+          setDefaultQuizCountState(Math.max(1, Math.min(20, Math.round(data.defaultQuizCount))));
+        }
+        if (
+          data.studyDifficulty === 'basic' ||
+          data.studyDifficulty === 'intermediate' ||
+          data.studyDifficulty === 'exam'
+        ) {
+          setStudyDifficultyState(data.studyDifficulty);
+        }
+        if (typeof data.autoShowQuizExplanations === 'boolean') {
+          setAutoShowQuizExplanationsState(data.autoShowQuizExplanations);
+        }
+        if (typeof data.editorFontSize === 'number' && Number.isFinite(data.editorFontSize)) {
+          setEditorFontSizeState(Math.max(13, Math.min(18, Math.round(data.editorFontSize))));
+        }
+        if (typeof data.editorLineHeight === 'number' && Number.isFinite(data.editorLineHeight)) {
+          setEditorLineHeightState(
+            Math.max(1.2, Math.min(2.4, Math.round(data.editorLineHeight * 100) / 100)),
+          );
+        }
         if (data.currentSubjectId !== undefined) setCurrentSubjectIdState(data.currentSubjectId);
         if (data.activeNoteId !== undefined) setActiveNoteIdState(data.activeNoteId);
         if (Array.isArray(data.openTabs)) setOpenTabsState(data.openTabs);
@@ -502,6 +584,15 @@ export function useWorkspaceStore() {
               userId: user.uid,
               themeMode: partial.themeMode ?? themeMode,
               geminiModel: partial.geminiModel ?? geminiModel,
+              aiResponseStyle: partial.aiResponseStyle ?? aiResponseStyle,
+              aiResponseLanguage: partial.aiResponseLanguage ?? aiResponseLanguage,
+              defaultFlashcardCount: partial.defaultFlashcardCount ?? defaultFlashcardCount,
+              defaultQuizCount: partial.defaultQuizCount ?? defaultQuizCount,
+              studyDifficulty: partial.studyDifficulty ?? studyDifficulty,
+              autoShowQuizExplanations:
+                partial.autoShowQuizExplanations ?? autoShowQuizExplanations,
+              editorFontSize: partial.editorFontSize ?? editorFontSize,
+              editorLineHeight: partial.editorLineHeight ?? editorLineHeight,
               currentSubjectId:
                 partial.currentSubjectId !== undefined ? partial.currentSubjectId : currentSubjectId,
               activeNoteId:
@@ -523,6 +614,14 @@ export function useWorkspaceStore() {
       user,
       themeMode,
       geminiModel,
+      aiResponseStyle,
+      aiResponseLanguage,
+      defaultFlashcardCount,
+      defaultQuizCount,
+      studyDifficulty,
+      autoShowQuizExplanations,
+      editorFontSize,
+      editorLineHeight,
       currentSubjectId,
       activeNoteId,
       openTabs,
@@ -557,10 +656,44 @@ export function useWorkspaceStore() {
     [updatePreferences],
   );
 
-  const setGeminiModel = useCallback(
-    (model: GeminiModelId) => {
-      setGeminiModelState(model);
-      void updatePreferences({ geminiModel: model });
+  const saveWorkspaceSettings = useCallback(
+    (next: {
+      geminiModel: GeminiModelId;
+      aiResponseStyle: AiResponseStyle;
+      aiResponseLanguage: AiResponseLanguage;
+      defaultFlashcardCount: number;
+      defaultQuizCount: number;
+      studyDifficulty: StudyDifficulty;
+      autoShowQuizExplanations: boolean;
+      editorFontSize: number;
+      editorLineHeight: number;
+    }) => {
+      const fcCount = Math.max(3, Math.min(10, Math.round(next.defaultFlashcardCount)));
+      const qCount = Math.max(1, Math.min(20, Math.round(next.defaultQuizCount)));
+      const fontSz = Math.max(13, Math.min(18, Math.round(next.editorFontSize)));
+      const lineH = Math.max(1.2, Math.min(2.4, Math.round(next.editorLineHeight * 100) / 100));
+
+      setGeminiModelState(next.geminiModel);
+      setAiResponseStyleState(next.aiResponseStyle);
+      setAiResponseLanguageState(next.aiResponseLanguage);
+      setDefaultFlashcardCountState(fcCount);
+      setDefaultQuizCountState(qCount);
+      setStudyDifficultyState(next.studyDifficulty);
+      setAutoShowQuizExplanationsState(next.autoShowQuizExplanations);
+      setEditorFontSizeState(fontSz);
+      setEditorLineHeightState(lineH);
+
+      void updatePreferences({
+        geminiModel: next.geminiModel,
+        aiResponseStyle: next.aiResponseStyle,
+        aiResponseLanguage: next.aiResponseLanguage,
+        defaultFlashcardCount: fcCount,
+        defaultQuizCount: qCount,
+        studyDifficulty: next.studyDifficulty,
+        autoShowQuizExplanations: next.autoShowQuizExplanations,
+        editorFontSize: fontSz,
+        editorLineHeight: lineH,
+      });
       showToast('Impostazioni salvate.', 'success');
     },
     [updatePreferences, showToast],
@@ -1451,6 +1584,14 @@ export function useWorkspaceStore() {
         exportedAt: new Date().toISOString(),
         themeMode,
         geminiModel,
+        aiResponseStyle,
+        aiResponseLanguage,
+        defaultFlashcardCount,
+        defaultQuizCount,
+        studyDifficulty,
+        autoShowQuizExplanations,
+        editorFontSize,
+        editorLineHeight,
         codeColorScheme: loadSavedCodeColors(),
         windowVisibility,
         panelWidths,
@@ -1513,6 +1654,14 @@ export function useWorkspaceStore() {
     getStudyFileBase64,
     themeMode,
     geminiModel,
+    aiResponseStyle,
+    aiResponseLanguage,
+    defaultFlashcardCount,
+    defaultQuizCount,
+    studyDifficulty,
+    autoShowQuizExplanations,
+    editorFontSize,
+    editorLineHeight,
     windowVisibility,
     panelWidths,
     panelOrder,
@@ -1862,6 +2011,53 @@ export function useWorkspaceStore() {
           prefUpdate.geminiModel = rawData.geminiModel;
           setGeminiModelState(rawData.geminiModel);
         }
+        if (
+          rawData.aiResponseStyle === 'concise' ||
+          rawData.aiResponseStyle === 'standard' ||
+          rawData.aiResponseStyle === 'in-depth'
+        ) {
+          prefUpdate.aiResponseStyle = rawData.aiResponseStyle;
+          setAiResponseStyleState(rawData.aiResponseStyle);
+        }
+        if (rawData.aiResponseLanguage === 'it' || rawData.aiResponseLanguage === 'en') {
+          prefUpdate.aiResponseLanguage = rawData.aiResponseLanguage;
+          setAiResponseLanguageState(rawData.aiResponseLanguage);
+        }
+        if (
+          typeof rawData.defaultFlashcardCount === 'number' &&
+          Number.isFinite(rawData.defaultFlashcardCount)
+        ) {
+          const fc = Math.max(3, Math.min(10, Math.round(rawData.defaultFlashcardCount)));
+          prefUpdate.defaultFlashcardCount = fc;
+          setDefaultFlashcardCountState(fc);
+        }
+        if (typeof rawData.defaultQuizCount === 'number' && Number.isFinite(rawData.defaultQuizCount)) {
+          const qc = Math.max(1, Math.min(20, Math.round(rawData.defaultQuizCount)));
+          prefUpdate.defaultQuizCount = qc;
+          setDefaultQuizCountState(qc);
+        }
+        if (
+          rawData.studyDifficulty === 'basic' ||
+          rawData.studyDifficulty === 'intermediate' ||
+          rawData.studyDifficulty === 'exam'
+        ) {
+          prefUpdate.studyDifficulty = rawData.studyDifficulty;
+          setStudyDifficultyState(rawData.studyDifficulty);
+        }
+        if (typeof rawData.autoShowQuizExplanations === 'boolean') {
+          prefUpdate.autoShowQuizExplanations = rawData.autoShowQuizExplanations;
+          setAutoShowQuizExplanationsState(rawData.autoShowQuizExplanations);
+        }
+        if (typeof rawData.editorFontSize === 'number' && Number.isFinite(rawData.editorFontSize)) {
+          const fs = Math.max(13, Math.min(18, Math.round(rawData.editorFontSize)));
+          prefUpdate.editorFontSize = fs;
+          setEditorFontSizeState(fs);
+        }
+        if (typeof rawData.editorLineHeight === 'number' && Number.isFinite(rawData.editorLineHeight)) {
+          const lh = Math.max(1.2, Math.min(2.4, Math.round(rawData.editorLineHeight * 100) / 100));
+          prefUpdate.editorLineHeight = lh;
+          setEditorLineHeightState(lh);
+        }
         if (rawData.windowVisibility && typeof rawData.windowVisibility === 'object') {
           const nextVis = { ...DEFAULT_WINDOW_VISIBILITY };
           (Object.keys(DEFAULT_WINDOW_VISIBILITY) as WindowId[]).forEach((k) => {
@@ -1944,6 +2140,14 @@ export function useWorkspaceStore() {
     quizHistory,
     themeMode,
     geminiModel,
+    aiResponseStyle,
+    aiResponseLanguage,
+    defaultFlashcardCount,
+    defaultQuizCount,
+    studyDifficulty,
+    autoShowQuizExplanations,
+    editorFontSize,
+    editorLineHeight,
     windowVisibility,
     panelWidths,
     panelOrder,
@@ -1954,7 +2158,7 @@ export function useWorkspaceStore() {
     loginWithGoogle,
     logout,
     setThemeMode,
-    setGeminiModel,
+    saveWorkspaceSettings,
     setWindowVisibility,
     setPanelWidths,
     setPanelOrder,

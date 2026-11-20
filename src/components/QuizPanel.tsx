@@ -14,12 +14,23 @@ import {
   X,
 } from 'lucide-react';
 import { stripHtml } from '../utils/exporters';
-import type { GeminiModelId, Note, Quiz, QuizQuestion } from '../types';
+import type {
+  AiResponseLanguage,
+  GeminiModelId,
+  Note,
+  Quiz,
+  QuizQuestion,
+  StudyDifficulty,
+} from '../types';
 
 interface QuizPanelProps {
   activeNote: Note | null;
   subjectName: string;
   geminiModel: GeminiModelId;
+  defaultQuizCount: number;
+  studyDifficulty: StudyDifficulty;
+  aiResponseLanguage: AiResponseLanguage;
+  autoShowQuizExplanations: boolean;
   activeQuiz: Quiz | null;
   quizHistory: Quiz[];
   generateTriggerToken: number;
@@ -39,6 +50,10 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
   activeNote,
   subjectName,
   geminiModel,
+  defaultQuizCount,
+  studyDifficulty,
+  aiResponseLanguage,
+  autoShowQuizExplanations,
   activeQuiz,
   quizHistory,
   generateTriggerToken,
@@ -53,8 +68,12 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
 }) => {
   const [viewMode, setViewMode] = useState<'active' | 'history'>('active');
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
-  const [questionCount, setQuestionCount] = useState<number>(5);
+  const [questionCount, setQuestionCount] = useState<number>(defaultQuizCount);
   const [generating, setGenerating] = useState(false);
+
+  useEffect(() => {
+    setQuestionCount(defaultQuizCount);
+  }, [defaultQuizCount]);
 
   useEffect(() => {
     setSelectedHistoryId(null);
@@ -67,7 +86,7 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
       return;
     }
 
-    const clampedCount = Math.max(1, Math.min(20, Math.round(questionCount || 5)));
+    const clampedCount = Math.max(1, Math.min(20, Math.round(questionCount || defaultQuizCount || 5)));
     setQuestionCount(clampedCount);
     setViewMode('active');
     setSelectedHistoryId(null);
@@ -82,9 +101,26 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
           noteText,
           subjectName,
           count: clampedCount,
+          difficulty: studyDifficulty,
+          responseLanguage: aiResponseLanguage,
         }),
       });
-      const data = await res.json();
+      const rawText = await res.text();
+      let data: { questions?: QuizQuestion[]; error?: string } = {};
+      if (rawText) {
+        try {
+          data = JSON.parse(rawText) as { questions?: QuizQuestion[]; error?: string };
+        } catch {
+          if (!res.ok) {
+            throw new Error(
+              res.status === 404
+                ? 'Servizio AI non disponibile su questo host statico (/api/ai/quiz).'
+                : `Errore HTTP ${res.status}`,
+            );
+          }
+          throw new Error('Risposta non valida dal server AI.');
+        }
+      }
       if (!res.ok) {
         throw new Error(data.error || `Errore HTTP ${res.status}`);
       }
@@ -167,6 +203,11 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
           const userChoice = quiz.userAnswers[String(qIdx)];
           const hasChoice = typeof userChoice === 'number';
           const isWrong = isSubmitted && userChoice !== q.correctIndex;
+          const showImmediateFeedback = !isSubmitted && autoShowQuizExplanations && hasChoice;
+          const revealCorrection = isSubmitted || showImmediateFeedback;
+          const showExplanation =
+            !!q.explanation &&
+            ((isSubmitted && (autoShowQuizExplanations || isWrong)) || showImmediateFeedback);
 
           return (
             <div
@@ -177,7 +218,7 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
                 <span>
                   DOMANDA {qIdx + 1} DI {quiz.questions.length}
                 </span>
-                {isSubmitted ? (
+                {revealCorrection ? (
                   userChoice === q.correctIndex ? (
                     <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
                       <Check className="w-3 h-3" /> Esatta
@@ -207,24 +248,21 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
                   let badgeStyle =
                     'bg-white dark:bg-vscode-sidebar border-slate-300 dark:border-vscode-borderLight text-slate-600 dark:text-vscode-text';
 
-                  if (!isSubmitted && isSelected) {
-                    cardStyle =
-                      'border-[var(--primary-500)] accent-soft-bg text-slate-900 dark:text-vscode-textBright font-medium cursor-pointer';
-                    badgeStyle =
-                      'accent-btn border-[var(--primary-600)]';
-                  } else if (isSubmitted) {
+                  if (revealCorrection) {
+                    const cursorClass = isSubmitted ? 'cursor-default' : 'cursor-pointer';
                     if (isSelected && !isCorrectOpt) {
-                      cardStyle =
-                        'border-red-500 bg-red-500/10 text-red-700 dark:text-red-300 font-medium cursor-default';
+                      cardStyle = `border-red-500 bg-red-500/10 text-red-700 dark:text-red-300 font-medium ${cursorClass}`;
                       badgeStyle = 'bg-red-600 border-red-600 text-white';
                     } else if (isCorrectOpt) {
-                      cardStyle =
-                        'border-emerald-500 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 font-medium cursor-default';
+                      cardStyle = `border-emerald-500 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 font-medium ${cursorClass}`;
                       badgeStyle = 'bg-emerald-600 border-emerald-600 text-white';
                     } else {
-                      cardStyle =
-                        'border-slate-200 dark:border-vscode-border bg-transparent text-slate-500 dark:text-vscode-textMuted opacity-70 cursor-default';
+                      cardStyle = `border-slate-200 dark:border-vscode-border bg-transparent text-slate-500 dark:text-vscode-textMuted opacity-70 ${cursorClass}`;
                     }
+                  } else if (isSelected) {
+                    cardStyle =
+                      'border-[var(--primary-500)] accent-soft-bg text-slate-900 dark:text-vscode-textBright font-medium cursor-pointer';
+                    badgeStyle = 'accent-btn border-[var(--primary-600)]';
                   }
 
                   return (
@@ -241,10 +279,10 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
                         {letter}
                       </span>
                       <span className="leading-snug flex-1">{optText}</span>
-                      {isSubmitted && isSelected && !isCorrectOpt && (
+                      {revealCorrection && isSelected && !isCorrectOpt && (
                         <X className="w-3.5 h-3.5 text-red-500 shrink-0" />
                       )}
-                      {isSubmitted && isCorrectOpt && (
+                      {revealCorrection && isCorrectOpt && (
                         <span className="ml-auto flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-[10px] font-semibold shrink-0">
                           <Check className="w-3 h-3" /> Corretta
                         </span>
@@ -254,11 +292,11 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
                 })}
               </div>
 
-              {isWrong && q.explanation && (
+              {showExplanation && (
                 <div className="mt-2.5 px-2.5 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[11px] text-slate-700 dark:text-vscode-text leading-relaxed flex items-start gap-1.5">
                   <Info className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
                   <span>
-                    <strong className="text-amber-700 dark:text-amber-400">Nota:</strong>{' '}
+                    <strong className="text-amber-700 dark:text-amber-400">Spiegazione:</strong>{' '}
                     {q.explanation}
                   </span>
                 </div>

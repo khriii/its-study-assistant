@@ -55,6 +55,33 @@
           "type": "string",
           "enum": ["gemini-4-hydrogen", "gemini-3.1-flash-lite"]
         },
+        "aiResponseStyle": {
+          "type": "string",
+          "enum": ["concise", "standard", "in-depth"]
+        },
+        "aiResponseLanguage": {
+          "type": "string",
+          "enum": ["it", "en"]
+        },
+        "defaultFlashcardCount": {
+          "type": "integer"
+        },
+        "defaultQuizCount": {
+          "type": "integer"
+        },
+        "studyDifficulty": {
+          "type": "string",
+          "enum": ["basic", "intermediate", "exam"]
+        },
+        "autoShowQuizExplanations": {
+          "type": "boolean"
+        },
+        "editorFontSize": {
+          "type": "number"
+        },
+        "editorLineHeight": {
+          "type": "number"
+        },
         "currentSubjectId": {
           "type": "string",
           "maxLength": 128

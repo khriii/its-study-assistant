@@ -63,10 +63,37 @@ service cloud.firestore {
 
     function isValidPreferences(data, userId) {
       return data.keys().hasAll(['userId', 'themeMode', 'geminiModel', 'currentSubjectId', 'activeNoteId', 'openTabs', 'windowVisibility', 'panelWidths', 'panelOrder', 'updatedAt'])
-        && data.keys().hasOnly(['userId', 'themeMode', 'geminiModel', 'currentSubjectId', 'activeNoteId', 'openTabs', 'windowVisibility', 'panelWidths', 'panelOrder', 'updatedAt'])
+        && data.keys().hasOnly([
+          'userId',
+          'themeMode',
+          'geminiModel',
+          'aiResponseStyle',
+          'aiResponseLanguage',
+          'defaultFlashcardCount',
+          'defaultQuizCount',
+          'studyDifficulty',
+          'autoShowQuizExplanations',
+          'editorFontSize',
+          'editorLineHeight',
+          'currentSubjectId',
+          'activeNoteId',
+          'openTabs',
+          'windowVisibility',
+          'panelWidths',
+          'panelOrder',
+          'updatedAt'
+        ])
         && data.userId is string && data.userId == userId
         && data.themeMode in ['light', 'dark', 'system']
         && data.geminiModel in ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']
+        && (!('aiResponseStyle' in data) || data.aiResponseStyle in ['concise', 'standard', 'in-depth'])
+        && (!('aiResponseLanguage' in data) || data.aiResponseLanguage in ['it', 'en'])
+        && (!('defaultFlashcardCount' in data) || (data.defaultFlashcardCount is int && data.defaultFlashcardCount >= 1 && data.defaultFlashcardCount <= 10))
+        && (!('defaultQuizCount' in data) || (data.defaultQuizCount is int && data.defaultQuizCount >= 1 && data.defaultQuizCount <= 20))
+        && (!('studyDifficulty' in data) || data.studyDifficulty in ['basic', 'intermediate', 'exam'])
+        && (!('autoShowQuizExplanations' in data) || data.autoShowQuizExplanations is bool)
+        && (!('editorFontSize' in data) || (data.editorFontSize is number && data.editorFontSize >= 13 && data.editorFontSize <= 18))
+        && (!('editorLineHeight' in data) || (data.editorLineHeight is number && data.editorLineHeight >= 1.2 && data.editorLineHeight <= 2.4))
         && (data.currentSubjectId == null || (data.currentSubjectId is string && data.currentSubjectId.size() <= 128))
         && (data.activeNoteId == null || (data.activeNoteId is string && data.activeNoteId.size() <= 128))
         && data.openTabs is list && data.openTabs.size() <= 50
@@ -206,7 +233,25 @@ service cloud.firestore {
           && isValidPreferences(incoming(), userId)
           && incoming().userId == existing().userId
           && incoming().updatedAt == request.time
-          && incoming().diff(existing()).affectedKeys().hasOnly(['themeMode', 'geminiModel', 'currentSubjectId', 'activeNoteId', 'openTabs', 'windowVisibility', 'panelWidths', 'panelOrder', 'updatedAt']);
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'themeMode',
+            'geminiModel',
+            'aiResponseStyle',
+            'aiResponseLanguage',
+            'defaultFlashcardCount',
+            'defaultQuizCount',
+            'studyDifficulty',
+            'autoShowQuizExplanations',
+            'editorFontSize',
+            'editorLineHeight',
+            'currentSubjectId',
+            'activeNoteId',
+            'openTabs',
+            'windowVisibility',
+            'panelWidths',
+            'panelOrder',
+            'updatedAt'
+          ]);
         allow delete: if isValidId(userId) && isValidId(prefId) && isOwner(userId);
       }
 

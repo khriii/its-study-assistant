@@ -20,29 +20,57 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { GEMINI_MODEL_OPTIONS, PRESET_ACCENT_COLORS } from '../constants/defaults';
+import {
+  AI_RESPONSE_LANGUAGE_OPTIONS,
+  AI_RESPONSE_STYLE_OPTIONS,
+  EDITOR_LINE_HEIGHT_OPTIONS,
+  GEMINI_MODEL_OPTIONS,
+  PRESET_ACCENT_COLORS,
+  STUDY_DIFFICULTY_OPTIONS,
+} from '../constants/defaults';
 import { PresetColorPicker } from './PresetColorPicker';
-import type { GeminiModelId, Subject, ToastItem } from '../types';
+import type {
+  AiResponseLanguage,
+  AiResponseStyle,
+  GeminiModelId,
+  StudyDifficulty,
+  Subject,
+  ToastItem,
+} from '../types';
 
-/* 1. Settings Modal (Gemini Model selection only - key managed server-side) */
+/* 1. Settings Modal (AI Model, Response Style & Language, Flashcard/Quiz Generator, Editor Preferences) */
+export interface WorkspaceSettingsValue {
+  geminiModel: GeminiModelId;
+  aiResponseStyle: AiResponseStyle;
+  aiResponseLanguage: AiResponseLanguage;
+  defaultFlashcardCount: number;
+  defaultQuizCount: number;
+  studyDifficulty: StudyDifficulty;
+  autoShowQuizExplanations: boolean;
+  editorFontSize: number;
+  editorLineHeight: number;
+}
+
 interface SettingsModalProps {
   open: boolean;
-  geminiModel: GeminiModelId;
+  settings: WorkspaceSettingsValue;
   onClose: () => void;
-  onSave: (model: GeminiModelId) => void;
+  onSave: (next: WorkspaceSettingsValue) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   open,
-  geminiModel,
+  settings,
   onClose,
   onSave,
 }) => {
-  const [selectedModel, setSelectedModel] = useState<GeminiModelId>(geminiModel);
+  const [draft, setDraft] = useState<WorkspaceSettingsValue>(settings);
 
   useEffect(() => {
-    if (open) setSelectedModel(geminiModel);
-  }, [open, geminiModel]);
+    if (open) {
+      setDraft(settings);
+    }
+  }, [open, settings]);
 
   if (!open) return null;
 
@@ -53,12 +81,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-white dark:bg-vscode-sidebar border border-slate-200 dark:border-vscode-borderLight rounded-2xl w-full max-w-md shadow-2xl overflow-hidden"
+        className="bg-white dark:bg-vscode-sidebar border border-slate-200 dark:border-vscode-borderLight rounded-2xl w-full max-w-lg max-h-[86vh] flex flex-col shadow-2xl overflow-hidden"
       >
-        <div className="px-5 py-4 border-b border-slate-200 dark:border-vscode-border flex justify-between items-center">
+        <div className="px-5 py-4 border-b border-slate-200 dark:border-vscode-border flex justify-between items-center flex-none">
           <h3 className="font-semibold text-sm text-slate-800 dark:text-vscode-textBright flex items-center gap-2">
             <SlidersHorizontal className="w-4 h-4 accent-icon" />
-            <span>Impostazioni AI Workspace</span>
+            <span>Impostazioni &amp; Modello AI</span>
           </h3>
           <button
             type="button"
@@ -69,33 +97,291 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
         </div>
 
-        <div className="p-5 space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 dark:text-vscode-textMuted uppercase tracking-wider mb-1.5">
-              Modello Gemini Predefinito
-            </label>
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value as GeminiModelId)}
-              className="w-full px-3 py-2.5 bg-slate-50 dark:bg-vscode-input border border-slate-200 dark:border-vscode-borderLight rounded-lg text-xs text-slate-800 dark:text-vscode-textBright focus:outline-none accent-focus"
-            >
-              {GEMINI_MODEL_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
+        <div className="p-5 space-y-5 overflow-y-auto flex-1">
+          {/* Section 1: AI Model & Response Style */}
+          <div className="space-y-3">
+            <div className="text-[11px] font-mono font-semibold uppercase tracking-wider accent-text">
+              Modello &amp; Stile Risposte AI
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-vscode-textMuted mb-1.5">
+                Modello Gemini Predefinito
+              </label>
+              <select
+                value={draft.geminiModel}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    geminiModel: e.target.value as GeminiModelId,
+                  }))
+                }
+                className="w-full px-3 py-2 bg-slate-50 dark:bg-vscode-input border border-slate-200 dark:border-vscode-borderLight rounded-lg text-xs text-slate-800 dark:text-vscode-textBright focus:outline-none accent-focus"
+              >
+                {GEMINI_MODEL_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-vscode-textMuted mb-1.5">
+                Stile e Lunghezza Risposte
+              </label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {AI_RESPONSE_STYLE_OPTIONS.map((opt) => {
+                  const active = draft.aiResponseStyle === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() =>
+                        setDraft((prev) => ({ ...prev, aiResponseStyle: opt.value }))
+                      }
+                      className={`px-2.5 py-2 rounded-lg border text-left transition cursor-pointer ${
+                        active
+                          ? 'accent-soft-bg border-[var(--primary-500)] text-slate-900 dark:text-vscode-textBright'
+                          : 'bg-slate-50 dark:bg-vscode-input border-slate-200 dark:border-vscode-borderLight text-slate-600 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover'
+                      }`}
+                    >
+                      <div className={`text-xs font-semibold ${active ? 'accent-text' : ''}`}>
+                        {opt.label}
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-vscode-textMuted leading-tight mt-0.5">
+                        {opt.description}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-vscode-textMuted mb-1.5">
+                Lingua Predefinita Risposte
+              </label>
+              <div className="grid grid-cols-2 gap-1.5 bg-slate-100 dark:bg-vscode-input p-1 rounded-lg">
+                {AI_RESPONSE_LANGUAGE_OPTIONS.map((lang) => {
+                  const active = draft.aiResponseLanguage === lang.value;
+                  return (
+                    <button
+                      key={lang.value}
+                      type="button"
+                      onClick={() =>
+                        setDraft((prev) => ({ ...prev, aiResponseLanguage: lang.value }))
+                      }
+                      className={`py-1.5 text-xs rounded-md transition cursor-pointer ${
+                        active
+                          ? 'bg-white dark:bg-vscode-sidebar accent-text font-semibold shadow-xs border border-slate-200 dark:border-vscode-borderLight'
+                          : 'text-slate-600 dark:text-vscode-text hover:bg-white/60 dark:hover:bg-vscode-sidebar/60 border border-transparent'
+                      }`}
+                    >
+                      {lang.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border flex items-start gap-2.5 text-[11px] text-slate-600 dark:text-vscode-textMuted leading-relaxed">
+              <Cpu className="w-3.5 h-3.5 accent-icon shrink-0 mt-0.5" />
+              <span>
+                La connessione a Gemini AI è gestita automaticamente dal server dell&apos;app: non è necessario inserire manualmente alcuna API key.
+              </span>
+            </div>
           </div>
 
-          <div className="p-3 rounded-xl bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border flex items-start gap-2.5 text-xs text-slate-600 dark:text-vscode-textMuted leading-relaxed">
-            <Cpu className="w-4 h-4 accent-icon shrink-0 mt-0.5" />
-            <span>
-              Le chiamate a Gemini AI (Tutor Chat, Flashcards e Quiz) vengono instradate in modo sicuro tramite il server applicativo senza esporre credenziali nel browser.
-            </span>
+          <div className="border-t border-slate-200 dark:border-vscode-border" />
+
+          {/* Section 2: Flashcard & Quiz Generator Settings */}
+          <div className="space-y-3">
+            <div className="text-[11px] font-mono font-semibold uppercase tracking-wider accent-text">
+              Generatore Flashcards &amp; Quiz
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-vscode-textMuted mb-1.5">
+                  Flashcards per Nota (3–10)
+                </label>
+                <input
+                  type="number"
+                  min={3}
+                  max={10}
+                  value={draft.defaultFlashcardCount}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      defaultFlashcardCount: Math.max(
+                        3,
+                        Math.min(10, Number(e.target.value) || 3),
+                      ),
+                    }))
+                  }
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-vscode-input border border-slate-200 dark:border-vscode-borderLight rounded-lg text-xs font-mono tabular-nums text-slate-800 dark:text-vscode-textBright focus:outline-none accent-focus"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-vscode-textMuted mb-1.5">
+                  Domande Quiz Default (1–20)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={draft.defaultQuizCount}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      defaultQuizCount: Math.max(
+                        1,
+                        Math.min(20, Number(e.target.value) || 1),
+                      ),
+                    }))
+                  }
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-vscode-input border border-slate-200 dark:border-vscode-borderLight rounded-lg text-xs font-mono tabular-nums text-slate-800 dark:text-vscode-textBright focus:outline-none accent-focus"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-vscode-textMuted mb-1.5">
+                Livello di Difficoltà
+              </label>
+              <div className="grid grid-cols-3 gap-1.5 bg-slate-100 dark:bg-vscode-input p-1 rounded-lg">
+                {STUDY_DIFFICULTY_OPTIONS.map((diff) => {
+                  const active = draft.studyDifficulty === diff.value;
+                  return (
+                    <button
+                      key={diff.value}
+                      type="button"
+                      onClick={() =>
+                        setDraft((prev) => ({ ...prev, studyDifficulty: diff.value }))
+                      }
+                      className={`py-1.5 text-xs rounded-md transition cursor-pointer ${
+                        active
+                          ? 'bg-white dark:bg-vscode-sidebar accent-text font-semibold shadow-xs border border-slate-200 dark:border-vscode-borderLight'
+                          : 'text-slate-600 dark:text-vscode-text hover:bg-white/60 dark:hover:bg-vscode-sidebar/60 border border-transparent'
+                      }`}
+                    >
+                      {diff.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <label className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border cursor-pointer">
+              <div>
+                <div className="text-xs font-semibold text-slate-800 dark:text-vscode-textBright">
+                  Spiegazioni automatiche nei Quiz
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-vscode-textMuted">
+                  Mostra subito feedback e spiegazione dopo ogni risposta selezionata
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={draft.autoShowQuizExplanations}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    autoShowQuizExplanations: e.target.checked,
+                  }))
+                }
+                className="w-4 h-4 accent-[var(--primary-600)] rounded cursor-pointer shrink-0"
+              />
+            </label>
+          </div>
+
+          <div className="border-t border-slate-200 dark:border-vscode-border" />
+
+          {/* Section 3: Editor Preferences */}
+          <div className="space-y-3">
+            <div className="text-[11px] font-mono font-semibold uppercase tracking-wider accent-text">
+              Preferenze Editor
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-slate-600 dark:text-vscode-textMuted">
+                  Dimensione Testo Note (titoli scalati in proporzione)
+                </label>
+                <span className="text-xs font-mono font-semibold tabular-nums accent-text">
+                  {draft.editorFontSize}px
+                </span>
+              </div>
+              <input
+                type="range"
+                min={13}
+                max={18}
+                step={1}
+                value={draft.editorFontSize}
+                onChange={(e) =>
+                  setDraft((prev) => ({ ...prev, editorFontSize: Number(e.target.value) }))
+                }
+                className="w-full accent-[var(--primary-600)] cursor-pointer"
+              />
+              <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-0.5">
+                <span>13px</span>
+                <span>14px</span>
+                <span>15px</span>
+                <span>16px</span>
+                <span>17px</span>
+                <span>18px</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-vscode-textMuted mb-1.5">
+                Interlinea
+              </label>
+              <div className="grid grid-cols-3 gap-1.5 bg-slate-100 dark:bg-vscode-input p-1 rounded-lg">
+                {EDITOR_LINE_HEIGHT_OPTIONS.map((lh) => {
+                  const active = Math.abs(draft.editorLineHeight - lh.value) < 0.05;
+                  return (
+                    <button
+                      key={lh.value}
+                      type="button"
+                      onClick={() =>
+                        setDraft((prev) => ({ ...prev, editorLineHeight: lh.value }))
+                      }
+                      className={`py-1.5 text-[11px] rounded-md transition cursor-pointer ${
+                        active
+                          ? 'bg-white dark:bg-vscode-sidebar accent-text font-semibold shadow-xs border border-slate-200 dark:border-vscode-borderLight'
+                          : 'text-slate-600 dark:text-vscode-text hover:bg-white/60 dark:hover:bg-vscode-sidebar/60 border border-transparent'
+                      }`}
+                    >
+                      {lh.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Live Typography Preview */}
+            <div
+              className="p-3 rounded-xl bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border text-slate-800 dark:text-vscode-textBright"
+              style={{
+                fontSize: `${draft.editorFontSize}px`,
+                lineHeight: draft.editorLineHeight,
+              }}
+            >
+              <div style={{ fontSize: '1.38em', fontWeight: 700, lineHeight: 1.25 }}>
+                Anteprima Titolo
+              </div>
+              <div className="text-slate-600 dark:text-vscode-text mt-1">
+                Testo di esempio dell&apos;editor a {draft.editorFontSize}px con interlinea{' '}
+                {draft.editorLineHeight}.
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="px-5 py-3 bg-slate-50 dark:bg-vscode-bg border-t border-slate-200 dark:border-vscode-border flex justify-end gap-2">
+        <div className="px-5 py-3 bg-slate-50 dark:bg-vscode-bg border-t border-slate-200 dark:border-vscode-border flex justify-end gap-2 flex-none">
           <button
             type="button"
             onClick={onClose}
@@ -106,7 +392,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <button
             type="button"
             onClick={() => {
-              onSave(selectedModel);
+              onSave(draft);
               onClose();
             }}
             className="px-4 py-2 text-xs font-semibold accent-btn rounded-lg transition shadow-xs cursor-pointer"

@@ -1,4 +1,11 @@
-import type { GeminiModelId, ThemeMode, WindowId } from '../types';
+import type {
+  AiResponseLanguage,
+  AiResponseStyle,
+  GeminiModelId,
+  StudyDifficulty,
+  ThemeMode,
+  WindowId,
+} from '../types';
 
 export interface WindowConfigMeta {
   id: WindowId;
@@ -45,9 +52,53 @@ export const DEFAULT_PANEL_ORDER: WindowId[] = [
 export const DEFAULT_THEME_MODE: ThemeMode = 'system';
 export const DEFAULT_GEMINI_MODEL: GeminiModelId = 'gemini-4-hydrogen';
 
-export const GEMINI_MODEL_OPTIONS: { value: GeminiModelId; label: string }[] = [
-  { value: 'gemini-4-hydrogen', label: 'gemini-4-hydrogen (Consigliato / Veloce)' },
-  { value: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite (Leggero / Compatto)' },
+export const DEFAULT_AI_RESPONSE_STYLE: AiResponseStyle = 'standard';
+export const DEFAULT_AI_RESPONSE_LANGUAGE: AiResponseLanguage = 'it';
+export const DEFAULT_FLASHCARD_COUNT = 6;
+export const DEFAULT_QUIZ_COUNT = 5;
+export const DEFAULT_STUDY_DIFFICULTY: StudyDifficulty = 'intermediate';
+export const DEFAULT_AUTO_SHOW_EXPLANATIONS = true;
+export const DEFAULT_EDITOR_FONT_SIZE = 14;
+export const DEFAULT_EDITOR_LINE_HEIGHT = 1.65;
+
+export const GEMINI_MODEL_OPTIONS: { value: GeminiModelId; label: string; badge: string }[] = [
+  {
+    value: 'gemini-4-hydrogen',
+    label: 'Gemini 4 Hydrogen (gemini-4-hydrogen) — Bilanciato & Ragionamento',
+    badge: 'Consigliato',
+  },
+  {
+    value: 'gemini-3.1-flash-lite',
+    label: 'Gemini 3.1 Flash Lite (gemini-3.1-flash-lite) — Ultra-veloce & Leggero',
+    badge: 'Rapido',
+  },
+];
+
+export const AI_RESPONSE_STYLE_OPTIONS: {
+  value: AiResponseStyle;
+  label: string;
+  description: string;
+}[] = [
+  { value: 'concise', label: 'Sintetico', description: 'A punti essenziali' },
+  { value: 'standard', label: 'Didattico', description: 'Chiaro e bilanciato' },
+  { value: 'in-depth', label: 'Approfondito', description: 'Dettagliato con esempi' },
+];
+
+export const AI_RESPONSE_LANGUAGE_OPTIONS: { value: AiResponseLanguage; label: string }[] = [
+  { value: 'it', label: 'Italiano' },
+  { value: 'en', label: 'Inglese tecnico' },
+];
+
+export const STUDY_DIFFICULTY_OPTIONS: { value: StudyDifficulty; label: string }[] = [
+  { value: 'basic', label: 'Base' },
+  { value: 'intermediate', label: 'Intermedio' },
+  { value: 'exam', label: 'Esame' },
+];
+
+export const EDITOR_LINE_HEIGHT_OPTIONS: { value: number; label: string }[] = [
+  { value: 1.45, label: 'Compatta (1.45)' },
+  { value: 1.65, label: 'Standard (1.65)' },
+  { value: 1.9, label: 'Ampia (1.90)' },
 ];
 
 export const HIGHLIGHT_SWATCHES: { color: string; label: string; border: string }[] = [

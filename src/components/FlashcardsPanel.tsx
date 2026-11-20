@@ -1,12 +1,21 @@
 import React, { useState } from 'react';
 import { GripVertical, Layers, Loader2, RotateCw, Sparkles, Trash2 } from 'lucide-react';
 import { stripHtml } from '../utils/exporters';
-import type { Flashcard, GeminiModelId, Note } from '../types';
+import type {
+  AiResponseLanguage,
+  Flashcard,
+  GeminiModelId,
+  Note,
+  StudyDifficulty,
+} from '../types';
 
 interface FlashcardsPanelProps {
   activeNote: Note | null;
   subjectName: string;
   geminiModel: GeminiModelId;
+  defaultFlashcardCount: number;
+  studyDifficulty: StudyDifficulty;
+  aiResponseLanguage: AiResponseLanguage;
   cards: Flashcard[];
   onAddCards: (noteId: string, subjectId: string, cards: { q: string; a: string }[]) => Promise<void>;
   onDeleteCard: (cardId: string) => void;
@@ -19,6 +28,9 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
   activeNote,
   subjectName,
   geminiModel,
+  defaultFlashcardCount,
+  studyDifficulty,
+  aiResponseLanguage,
   cards,
   onAddCards,
   onDeleteCard,
@@ -45,9 +57,27 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
           model: geminiModel,
           noteText,
           subjectName,
+          count: defaultFlashcardCount,
+          difficulty: studyDifficulty,
+          responseLanguage: aiResponseLanguage,
         }),
       });
-      const data = await res.json();
+      const rawText = await res.text();
+      let data: { cards?: { q: string; a: string }[]; error?: string } = {};
+      if (rawText) {
+        try {
+          data = JSON.parse(rawText) as { cards?: { q: string; a: string }[]; error?: string };
+        } catch {
+          if (!res.ok) {
+            throw new Error(
+              res.status === 404
+                ? 'Servizio AI non disponibile su questo host statico (/api/ai/flashcards).'
+                : `Errore HTTP ${res.status}`,
+            );
+          }
+          throw new Error('Risposta non valida dal server AI.');
+        }
+      }
       if (!res.ok) {
         throw new Error(data.error || `Errore HTTP ${res.status}`);
       }

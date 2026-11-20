@@ -356,6 +356,8 @@ export default function App() {
             subjectName={store.currentSubject?.name || 'Studio ITS'}
             saveStatus={store.saveStatus}
             searchTriggerToken={searchTriggerToken}
+            editorFontSize={store.editorFontSize}
+            editorLineHeight={store.editorLineHeight}
             onSelectNote={store.openNote}
             onCloseTab={store.closeTab}
             onReorderTabs={store.reorderTabs}
@@ -378,6 +380,9 @@ export default function App() {
             activeNote={store.activeNote}
             subjectName={store.currentSubject?.name || 'Studio ITS'}
             geminiModel={store.geminiModel}
+            defaultFlashcardCount={store.defaultFlashcardCount}
+            studyDifficulty={store.studyDifficulty}
+            aiResponseLanguage={store.aiResponseLanguage}
             cards={store.activeNoteFlashcards}
             onAddCards={store.addFlashcardsBatch}
             onDeleteCard={(cardId) => void store.deleteFlashcard(cardId)}
@@ -391,6 +396,10 @@ export default function App() {
             activeNote={store.activeNote}
             subjectName={store.currentSubject?.name || 'Studio ITS'}
             geminiModel={store.geminiModel}
+            defaultQuizCount={store.defaultQuizCount}
+            studyDifficulty={store.studyDifficulty}
+            aiResponseLanguage={store.aiResponseLanguage}
+            autoShowQuizExplanations={store.autoShowQuizExplanations}
             activeQuiz={store.activeQuiz}
             quizHistory={store.quizHistory}
             generateTriggerToken={quizTriggerToken}
@@ -414,6 +423,8 @@ export default function App() {
             studyFiles={store.subjectStudyFiles}
             onGetStudyFileBase64={store.getStudyFileBase64}
             geminiModel={store.geminiModel}
+            aiResponseStyle={store.aiResponseStyle}
+            aiResponseLanguage={store.aiResponseLanguage}
             externalPrompt={externalAiPrompt}
             onToast={store.showToast}
             {...dragProps}
@@ -611,9 +622,19 @@ export default function App() {
       {/* Modals & Notifications */}
       <SettingsModal
         open={settingsOpen}
-        geminiModel={store.geminiModel}
+        settings={{
+          geminiModel: store.geminiModel,
+          aiResponseStyle: store.aiResponseStyle,
+          aiResponseLanguage: store.aiResponseLanguage,
+          defaultFlashcardCount: store.defaultFlashcardCount,
+          defaultQuizCount: store.defaultQuizCount,
+          studyDifficulty: store.studyDifficulty,
+          autoShowQuizExplanations: store.autoShowQuizExplanations,
+          editorFontSize: store.editorFontSize,
+          editorLineHeight: store.editorLineHeight,
+        }}
         onClose={() => setSettingsOpen(false)}
-        onSave={store.setGeminiModel}
+        onSave={store.saveWorkspaceSettings}
       />
 
       <SubjectCustomizeModal

@@ -22,7 +22,16 @@ import {
   getStudyFileExt,
 } from '../utils/documentParser';
 import { readAttachmentFile, stripHtml } from '../utils/exporters';
-import type { ChatAttachment, ChatMessage, GeminiModelId, Note, StudyFile, Subject } from '../types';
+import type {
+  AiResponseLanguage,
+  AiResponseStyle,
+  ChatAttachment,
+  ChatMessage,
+  GeminiModelId,
+  Note,
+  StudyFile,
+  Subject,
+} from '../types';
 
 export interface ExternalAiPrompt {
   id: string;
@@ -37,6 +46,8 @@ interface AiChatPanelProps {
   studyFiles: StudyFile[];
   onGetStudyFileBase64: (fileId: string) => Promise<string>;
   geminiModel: GeminiModelId;
+  aiResponseStyle: AiResponseStyle;
+  aiResponseLanguage: AiResponseLanguage;
   externalPrompt: ExternalAiPrompt | null;
   onToast: (message: string, type?: 'success' | 'error' | 'info') => void;
   onHeaderDragStart?: (e: React.DragEvent) => void;
@@ -50,6 +61,8 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
   studyFiles,
   onGetStudyFileBase64,
   geminiModel,
+  aiResponseStyle,
+  aiResponseLanguage,
   externalPrompt,
   onToast,
   onHeaderDragStart,
@@ -139,10 +152,27 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
           body: JSON.stringify({
             model: geminiModel,
             systemInstruction,
+            responseStyle: aiResponseStyle,
+            responseLanguage: aiResponseLanguage,
             contents: nextHistory,
           }),
         });
-        const data = await res.json();
+        const rawText = await res.text();
+        let data: { text?: string; error?: string } = {};
+        if (rawText) {
+          try {
+            data = JSON.parse(rawText) as { text?: string; error?: string };
+          } catch {
+            if (!res.ok) {
+              throw new Error(
+                res.status === 404
+                  ? 'Servizio AI non disponibile su questo host statico (/api/ai/chat).'
+                  : `Errore HTTP ${res.status}`,
+              );
+            }
+            throw new Error('Risposta non valida dal server AI.');
+          }
+        }
         if (!res.ok) {
           throw new Error(data.error || `Errore HTTP ${res.status}`);
         }
@@ -175,7 +205,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
         setSending(false);
       }
     },
-    [sending, currentSubject, geminiModel],
+    [sending, currentSubject, geminiModel, aiResponseStyle, aiResponseLanguage],
   );
 
   // Triggered from selection modal / command palette
@@ -322,6 +352,10 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
           try {
             if (file.fileExt === 'pdf') {
               const b64 = await onGetStudyFileBase64(file.id);
+              if (!b64) {
+                onToast(`Impossibile leggere il contenuto di "${file.name}".`, 'error');
+                return;
+              }
               setAttachments((prev) => [
                 ...prev,
                 {
@@ -335,6 +369,10 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
               let extracted = file.extractedText?.trim() || '';
               if (!extracted) {
                 const b64 = await onGetStudyFileBase64(file.id);
+                if (!b64) {
+                  onToast(`Impossibile leggere il contenuto di "${file.name}".`, 'error');
+                  return;
+                }
                 const parsed = await extractDocumentPreview(
                   base64ToUint8Array(b64),
                   file.fileExt,

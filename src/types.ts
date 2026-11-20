@@ -2,6 +2,10 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 
 export type GeminiModelId = 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite';
 
+export type AiResponseStyle = 'concise' | 'standard' | 'in-depth';
+export type AiResponseLanguage = 'it' | 'en';
+export type StudyDifficulty = 'basic' | 'intermediate' | 'exam';
+
 export type WindowId =
   | 'sidebar'
   | 'pdf-viewer-panel'
@@ -89,6 +93,14 @@ export interface WorkspacePreferences {
   userId: string;
   themeMode: ThemeMode;
   geminiModel: GeminiModelId;
+  aiResponseStyle?: AiResponseStyle;
+  aiResponseLanguage?: AiResponseLanguage;
+  defaultFlashcardCount?: number;
+  defaultQuizCount?: number;
+  studyDifficulty?: StudyDifficulty;
+  autoShowQuizExplanations?: boolean;
+  editorFontSize?: number;
+  editorLineHeight?: number;
   currentSubjectId: string | null;
   activeNoteId: string | null;
   openTabs: string[];

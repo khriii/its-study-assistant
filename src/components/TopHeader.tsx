@@ -102,10 +102,10 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   return (
     <header
       ref={headerRef}
-      className="h-12 px-2.5 sm:px-3 bg-white dark:bg-vscode-sidebar border-b border-slate-200 dark:border-vscode-border flex items-center justify-between gap-2 flex-none z-30 select-none"
+      className="h-12 px-2.5 sm:px-3 bg-white dark:bg-vscode-sidebar border-b border-slate-200 dark:border-vscode-border flex items-center justify-between lg:grid lg:grid-cols-[1fr_auto_1fr] gap-2 flex-none z-30 select-none"
     >
       {/* Left: Mobile Drawer Button, Brand & Subject Selector */}
-      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0 lg:justify-self-start">
         <button
           type="button"
           onClick={onToggleMobileDrawer}
@@ -128,7 +128,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
               ITS Study Assistant
             </span>
             <span className="text-[10px] font-mono font-medium text-slate-400 dark:text-vscode-textMuted leading-none mt-0.5">
-              v1.0.0
+              v1.0.1
             </span>
           </div>
         </div>
@@ -224,11 +224,11 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         </div>
       </div>
 
-      {/* Center: Command Palette Trigger */}
+      {/* Center: Command Palette Trigger (independently centered on desktop) */}
       <button
         type="button"
         onClick={onOpenCommandPalette}
-        className="hidden lg:flex items-center gap-3 px-3 py-1.5 bg-slate-100 dark:bg-vscode-input hover:bg-slate-200 dark:hover:bg-vscode-hover border border-slate-200 dark:border-vscode-borderLight rounded-lg text-xs text-slate-500 dark:text-vscode-textMuted transition w-60 justify-between cursor-pointer"
+        className="hidden lg:flex lg:justify-self-center items-center gap-3 px-3 py-1.5 bg-slate-100 dark:bg-vscode-input hover:bg-slate-200 dark:hover:bg-vscode-hover border border-slate-200 dark:border-vscode-borderLight rounded-lg text-xs text-slate-500 dark:text-vscode-textMuted transition w-60 justify-between cursor-pointer"
       >
         <span className="flex items-center gap-2 truncate">
           <Terminal className="w-3.5 h-3.5 shrink-0" />
@@ -239,8 +239,8 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         </kbd>
       </button>
 
-      {/* Right: Workspace Presets, Windows Dropdown & Profile Menu */}
-      <div className="flex items-center gap-1.5 sm:gap-2 flex-none">
+      {/* Right: Windows Dropdown & Profile Menu */}
+      <div className="flex items-center gap-1.5 sm:gap-2 flex-none lg:justify-self-end">
         <button
           type="button"
           onClick={onOpenCommandPalette}

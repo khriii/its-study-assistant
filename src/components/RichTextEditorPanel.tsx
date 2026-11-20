@@ -56,6 +56,8 @@ interface RichTextEditorPanelProps {
   subjectName: string;
   saveStatus: 'Salvato' | 'Salvataggio...';
   searchTriggerToken: number;
+  editorFontSize: number;
+  editorLineHeight: number;
   onSelectNote: (noteId: string) => void;
   onCloseTab: (noteId: string) => void;
   onReorderTabs: (fromNoteId: string, toNoteId: string, position: 'before' | 'after') => void;
@@ -280,6 +282,8 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
   subjectName,
   saveStatus,
   searchTriggerToken,
+  editorFontSize,
+  editorLineHeight,
   onSelectNote,
   onCloseTab,
   onReorderTabs,
@@ -2185,7 +2189,11 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
             syncSelectionState();
           }}
           onContextMenu={handleContextMenu}
-          className="flex-1 w-full h-full overflow-y-auto p-4 sm:p-6 focus:outline-none text-sm leading-relaxed text-slate-800 dark:text-vscode-textBright"
+          style={{
+            fontSize: `${editorFontSize}px`,
+            lineHeight: editorLineHeight,
+          }}
+          className="flex-1 w-full h-full overflow-y-auto p-4 sm:p-6 focus:outline-none text-slate-800 dark:text-vscode-textBright"
         />
 
         {/* Render interactive CodeBlockWidget inside each code block host via React Portal */}

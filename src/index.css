@@ -158,49 +158,49 @@ html, body {
 }
 
 #notes-area h1 {
-  font-size: 1.6rem;
+  font-size: 1.75em;
   font-weight: 700;
-  margin-top: 1.1rem;
-  margin-bottom: 0.6rem;
+  margin-top: 1.1em;
+  margin-bottom: 0.6em;
   line-height: 1.25;
   border-bottom: 1px solid rgba(148, 163, 184, 0.25);
-  padding-bottom: 0.3rem;
+  padding-bottom: 0.3em;
 }
 
 #notes-area h2 {
-  font-size: 1.25rem;
+  font-size: 1.38em;
   font-weight: 600;
-  margin-top: 0.95rem;
-  margin-bottom: 0.45rem;
+  margin-top: 0.95em;
+  margin-bottom: 0.45em;
   line-height: 1.3;
 }
 
 #notes-area h3 {
-  font-size: 1.08rem;
+  font-size: 1.16em;
   font-weight: 600;
-  margin-top: 0.8rem;
-  margin-bottom: 0.35rem;
+  margin-top: 0.8em;
+  margin-bottom: 0.35em;
 }
 
 #notes-area p {
-  margin: 0.65rem 0;
+  margin: 0.65em 0;
   min-height: 1.25em;
 }
 
 #notes-area ul {
   list-style-type: disc;
-  padding-left: 1.5rem;
-  margin: 0.5rem 0;
+  padding-left: 1.5em;
+  margin: 0.5em 0;
 }
 
 #notes-area ol {
   list-style-type: decimal;
-  padding-left: 1.5rem;
-  margin: 0.5rem 0;
+  padding-left: 1.5em;
+  margin: 0.5em 0;
 }
 
 #notes-area li {
-  margin: 0.2rem 0;
+  margin: 0.2em 0;
 }
 
 #notes-area code:not(pre code) {
@@ -256,8 +256,8 @@ html, body {
 #notes-area table.its-table {
   width: 100%;
   border-collapse: collapse;
-  margin: 0.85rem 0;
-  font-size: 0.82rem;
+  margin: 0.85em 0;
+  font-size: 0.9em;
 }
 #notes-area table.its-table th,
 #notes-area table.its-table td {
