@@ -13,6 +13,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { getAiEndpoint, parseAiJsonResponse } from '../utils/aiApi';
 import { stripHtml } from '../utils/exporters';
 import type {
   AiResponseLanguage,
@@ -93,7 +94,7 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
     setGenerating(true);
 
     try {
-      const res = await fetch('/api/ai/quiz', {
+      const res = await fetch(getAiEndpoint('/api/ai/quiz'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -105,25 +106,10 @@ export const QuizPanel: React.FC<QuizPanelProps> = ({
           responseLanguage: aiResponseLanguage,
         }),
       });
-      const rawText = await res.text();
-      let data: { questions?: QuizQuestion[]; error?: string } = {};
-      if (rawText) {
-        try {
-          data = JSON.parse(rawText) as { questions?: QuizQuestion[]; error?: string };
-        } catch {
-          if (!res.ok) {
-            throw new Error(
-              res.status === 404
-                ? 'Servizio AI non disponibile su questo host statico (/api/ai/quiz).'
-                : `Errore HTTP ${res.status}`,
-            );
-          }
-          throw new Error('Risposta non valida dal server AI.');
-        }
-      }
-      if (!res.ok) {
-        throw new Error(data.error || `Errore HTTP ${res.status}`);
-      }
+      const data = await parseAiJsonResponse<{ questions?: QuizQuestion[]; error?: string }>(
+        res,
+        '/api/ai/quiz',
+      );
       if (!Array.isArray(data.questions) || data.questions.length === 0) {
         throw new Error('Formato domande non valido.');
       }

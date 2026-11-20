@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { GripVertical, Layers, Loader2, RotateCw, Sparkles, Trash2 } from 'lucide-react';
+import { getAiEndpoint, parseAiJsonResponse } from '../utils/aiApi';
 import { stripHtml } from '../utils/exporters';
 import type {
   AiResponseLanguage,
@@ -50,7 +51,7 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
 
     setGenerating(true);
     try {
-      const res = await fetch('/api/ai/flashcards', {
+      const res = await fetch(getAiEndpoint('/api/ai/flashcards'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -62,25 +63,10 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
           responseLanguage: aiResponseLanguage,
         }),
       });
-      const rawText = await res.text();
-      let data: { cards?: { q: string; a: string }[]; error?: string } = {};
-      if (rawText) {
-        try {
-          data = JSON.parse(rawText) as { cards?: { q: string; a: string }[]; error?: string };
-        } catch {
-          if (!res.ok) {
-            throw new Error(
-              res.status === 404
-                ? 'Servizio AI non disponibile su questo host statico (/api/ai/flashcards).'
-                : `Errore HTTP ${res.status}`,
-            );
-          }
-          throw new Error('Risposta non valida dal server AI.');
-        }
-      }
-      if (!res.ok) {
-        throw new Error(data.error || `Errore HTTP ${res.status}`);
-      }
+      const data = await parseAiJsonResponse<{ cards?: { q: string; a: string }[]; error?: string }>(
+        res,
+        '/api/ai/flashcards',
+      );
       if (!Array.isArray(data.cards) || data.cards.length === 0) {
         throw new Error('Nessuna flashcard generata.');
       }

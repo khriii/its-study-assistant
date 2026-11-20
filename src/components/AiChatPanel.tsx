@@ -16,6 +16,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import { getAiEndpoint, parseAiJsonResponse } from '../utils/aiApi';
 import {
   base64ToUint8Array,
   extractDocumentPreview,
@@ -146,7 +147,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
           currentSubject?.systemPrompt ||
           `Sei un tutor AI didattico per studenti ITS nella materia ${subjectName}. Rispondi in italiano in modo chiaro, strutturato e preciso.`;
 
-        const res = await fetch('/api/ai/chat', {
+        const res = await fetch(getAiEndpoint('/api/ai/chat'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -157,25 +158,10 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
             contents: nextHistory,
           }),
         });
-        const rawText = await res.text();
-        let data: { text?: string; error?: string } = {};
-        if (rawText) {
-          try {
-            data = JSON.parse(rawText) as { text?: string; error?: string };
-          } catch {
-            if (!res.ok) {
-              throw new Error(
-                res.status === 404
-                  ? 'Servizio AI non disponibile su questo host statico (/api/ai/chat).'
-                  : `Errore HTTP ${res.status}`,
-              );
-            }
-            throw new Error('Risposta non valida dal server AI.');
-          }
-        }
-        if (!res.ok) {
-          throw new Error(data.error || `Errore HTTP ${res.status}`);
-        }
+        const data = await parseAiJsonResponse<{ text?: string; error?: string }>(
+          res,
+          '/api/ai/chat',
+        );
 
         const replyText = String(data.text || 'Nessuna risposta ricevuta.');
         historyPartsRef.current = [

@@ -28,6 +28,7 @@ import {
   PRESET_ACCENT_COLORS,
   STUDY_DIFFICULTY_OPTIONS,
 } from '../constants/defaults';
+import { isStaticHostWithoutAiBackend } from '../utils/aiApi';
 import { PresetColorPicker } from './PresetColorPicker';
 import type {
   AiResponseLanguage,
@@ -188,7 +189,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-vscode-bg border border-slate-200 dark:border-vscode-border flex items-start gap-2.5 text-[11px] text-slate-600 dark:text-vscode-textMuted leading-relaxed">
               <Cpu className="w-3.5 h-3.5 accent-icon shrink-0 mt-0.5" />
               <span>
-                La connessione a Gemini AI è gestita automaticamente dal server dell&apos;app: non è necessario inserire manualmente alcuna API key.
+                {isStaticHostWithoutAiBackend()
+                  ? 'Stai usando la versione statica su GitHub Pages: appunti, PDF e sincronizzazione Firebase funzionano, mentre le chiamate Gemini AI vengono eseguite solo tramite il server Node (/api/ai/*) in AI Studio o su un backend collegato con VITE_AI_API_URL (nessuna API key viene inserita nel browser).'
+                  : "La connessione a Gemini AI è gestita automaticamente dal server dell'app: non è necessario inserire manualmente alcuna API key."}
               </span>
             </div>
           </div>

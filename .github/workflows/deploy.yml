@@ -43,6 +43,8 @@ jobs:
           printf '%s' "$FIREBASE_CONFIG_JSON" > firebase-applet-config.json
 
       - name: Build React application
+        env:
+          VITE_AI_API_URL: ${{ vars.VITE_AI_API_URL }}
         run: npm run build
 
       - name: Setup GitHub Pages
