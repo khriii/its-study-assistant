@@ -1,14 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FileText, FolderOpen, GripVertical, Loader2, Maximize2, Minimize2, PanelTop, Presentation, X } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  FileText,
+  FolderOpen,
+  GripVertical,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  PanelTop,
+  Presentation,
+  X,
+} from 'lucide-react';
 import {
   base64ToBlobUrl,
   base64ToUint8Array,
   extractDocumentPreview,
+  formatFileSize,
   getStudyFileExt,
   type ParsedDocBlock,
   type ParsedSlide,
 } from '../utils/documentParser';
-import type { PanelWindowActions, StudyFile } from '../types';
+import type { PanelWindowActions, StudyFile, StudyFileExt } from '../types';
 
 interface SlideViewerPanelProps extends PanelWindowActions {
   studyFiles: StudyFile[];
@@ -46,7 +59,39 @@ export const SlideViewerPanel: React.FC<SlideViewerPanelProps> = ({
 }) => {
   const [viewerState, setViewerState] = useState<ViewerState | null>(null);
   const [loadingFile, setLoadingFile] = useState(false);
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const activeBlobUrlRef = useRef<string | null>(null);
+  const fileMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!fileMenuOpen) return;
+    const handleOutside = (e: MouseEvent | TouchEvent) => {
+      if (fileMenuRef.current && !fileMenuRef.current.contains(e.target as Node)) {
+        setFileMenuOpen(false);
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFileMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    window.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+      window.removeEventListener('keydown', handleEsc);
+    };
+  }, [fileMenuOpen]);
+
+  const renderExtIcon = (ext: StudyFileExt, cls = 'w-3.5 h-3.5 shrink-0') => {
+    if (ext === 'pptx') return <Presentation className={`${cls} text-orange-500`} />;
+    if (ext === 'docx') return <FileText className={`${cls} text-blue-500`} />;
+    return <FileText className={`${cls} text-red-500`} />;
+  };
+
+  const selectedFileMeta = selectedExplorerFileId
+    ? studyFiles.find((f) => f.id === selectedExplorerFileId) || null
+    : null;
 
   const revokeCurrentBlob = () => {
     if (activeBlobUrlRef.current) {
@@ -256,19 +301,104 @@ export const SlideViewerPanel: React.FC<SlideViewerPanelProps> = ({
       {/* Selector & Local Open Bar */}
       <div className="p-2 border-b border-slate-200 dark:border-vscode-border bg-slate-100 dark:bg-vscode-tabInactive flex flex-wrap items-center gap-1.5 flex-none">
         {studyFiles.length > 0 && (
-          <select
-            value={selectedExplorerFileId || ''}
-            onChange={(e) => onSelectExplorerFile(e.target.value || null)}
-            aria-label="Seleziona file dall'Explorer"
-            className="flex-1 min-w-[130px] bg-white dark:bg-vscode-input text-[11px] font-medium text-slate-700 dark:text-vscode-textBright px-2 py-1.5 rounded-lg border border-slate-200 dark:border-vscode-borderLight focus:outline-none accent-focus cursor-pointer truncate"
-          >
-            <option value="">Da Explorer ({studyFiles.length})...</option>
-            {studyFiles.map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.name} ({f.fileExt.toUpperCase()})
-              </option>
-            ))}
-          </select>
+          <div ref={fileMenuRef} className="relative flex-1 min-w-[140px]">
+            <button
+              type="button"
+              onClick={() => setFileMenuOpen((prev) => !prev)}
+              aria-haspopup="listbox"
+              aria-expanded={fileMenuOpen}
+              aria-label="Seleziona file dall'Explorer"
+              className={`w-full h-8 bg-white dark:bg-vscode-input hover:bg-slate-50 dark:hover:bg-vscode-hover text-[11px] font-medium text-slate-700 dark:text-vscode-textBright px-2.5 rounded-lg border transition shadow-xs flex items-center justify-between gap-2 cursor-pointer ${
+                fileMenuOpen
+                  ? 'border-[var(--primary-500)] ring-1 ring-[var(--primary-500)]/40'
+                  : 'border-slate-200 dark:border-vscode-borderLight'
+              }`}
+            >
+              <span className="flex items-center gap-1.5 min-w-0">
+                {selectedFileMeta ? (
+                  renderExtIcon(selectedFileMeta.fileExt)
+                ) : (
+                  <FileText className="w-3.5 h-3.5 text-slate-400 dark:text-vscode-textMuted shrink-0" />
+                )}
+                <span className="truncate">
+                  {selectedFileMeta
+                    ? selectedFileMeta.name
+                    : `Da Explorer (${studyFiles.length})`}
+                </span>
+              </span>
+              <span className="flex items-center gap-1 shrink-0">
+                {selectedFileMeta && (
+                  <span className="text-[9px] font-mono uppercase px-1 py-0.2 rounded bg-slate-100 dark:bg-vscode-sidebar text-slate-500 dark:text-vscode-textMuted">
+                    {selectedFileMeta.fileExt}
+                  </span>
+                )}
+                <ChevronDown
+                  className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
+                    fileMenuOpen ? 'rotate-180' : ''
+                  }`}
+                />
+              </span>
+            </button>
+
+            {fileMenuOpen && (
+              <div
+                role="listbox"
+                className="absolute left-0 right-0 mt-1.5 min-w-[230px] max-h-64 overflow-y-auto p-1 bg-white dark:bg-vscode-sidebar border border-slate-200 dark:border-vscode-borderLight rounded-xl shadow-2xl z-50 flex flex-col gap-0.5"
+              >
+                <div className="px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-400 dark:text-vscode-textMuted flex items-center justify-between">
+                  <span>File nell&apos;Explorer</span>
+                  <span>{studyFiles.length}</span>
+                </div>
+                {studyFiles.map((f) => {
+                  const isActive = f.id === selectedExplorerFileId;
+                  return (
+                    <button
+                      key={f.id}
+                      type="button"
+                      role="option"
+                      aria-selected={isActive}
+                      onClick={() => {
+                        onSelectExplorerFile(f.id);
+                        setFileMenuOpen(false);
+                      }}
+                      className={`w-full text-left px-2 py-1.5 rounded-lg text-xs flex items-center justify-between gap-2 transition cursor-pointer ${
+                        isActive
+                          ? 'accent-selected-row font-semibold'
+                          : 'text-slate-700 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover'
+                      }`}
+                    >
+                      <span className="flex items-center gap-2 min-w-0">
+                        {renderExtIcon(f.fileExt)}
+                        <span className="truncate">{f.name}</span>
+                      </span>
+                      <span className="flex items-center gap-1.5 shrink-0">
+                        <span className="text-[9px] font-mono uppercase px-1 py-0.5 rounded bg-slate-100 dark:bg-vscode-input text-slate-500 dark:text-vscode-textMuted">
+                          {f.fileExt} · {formatFileSize(f.size)}
+                        </span>
+                        {isActive && <Check className="w-3.5 h-3.5 accent-icon shrink-0" />}
+                      </span>
+                    </button>
+                  );
+                })}
+                {selectedFileMeta && (
+                  <>
+                    <div className="h-px bg-slate-100 dark:bg-vscode-border my-0.5" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleCloseFile();
+                        setFileMenuOpen(false);
+                      }}
+                      className="w-full text-left px-2 py-1.5 rounded-lg text-[11px] text-slate-500 dark:text-vscode-textMuted hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 flex items-center gap-1.5 transition cursor-pointer"
+                    >
+                      <X className="w-3 h-3" />
+                      <span>Chiudi file corrente</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         <label className="px-2.5 py-1.5 bg-white dark:bg-vscode-input hover:bg-slate-50 dark:hover:bg-vscode-hover text-slate-700 dark:text-vscode-textBright border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1.5 cursor-pointer shadow-xs transition min-w-0 max-w-full">

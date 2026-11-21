@@ -404,19 +404,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 dark:text-vscode-textMuted mb-1.5">
-                  Flashcards per Nota (3–10)
+                  Flashcards per Nota (1–10)
                 </label>
                 <input
                   type="number"
-                  min={3}
+                  min={1}
                   max={10}
                   value={draft.defaultFlashcardCount}
                   onChange={(e) =>
                     setDraft((prev) => ({
                       ...prev,
                       defaultFlashcardCount: Math.max(
-                        3,
-                        Math.min(10, Number(e.target.value) || 3),
+                        1,
+                        Math.min(10, Number(e.target.value) || 1),
                       ),
                     }))
                   }

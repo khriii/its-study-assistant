@@ -1,4 +1,5 @@
 import type { ChatAttachment } from '../types';
+import { parseDrawingData, renderDrawingToSvgString } from './drawing';
 
 export function escapeHtml(str: string): string {
   return String(str || '')
@@ -12,6 +13,7 @@ export function escapeHtml(str: string): string {
 export function stripHtml(html: string): string {
   const tmp = document.createElement('div');
   tmp.innerHTML = html || '';
+  tmp.querySelectorAll('.its-page-drawing, .its-drawing-block').forEach((n) => n.remove());
   return tmp.textContent || tmp.innerText || '';
 }
 
@@ -97,6 +99,13 @@ function htmlToMarkdown(root: HTMLElement): string {
       out += '\n';
     } else if (tag === 'div' && elem.classList.contains('its-callout')) {
       out += `> ${elem.innerText.trim().replace(/\n/g, '\n> ')}\n\n`;
+    } else if (tag === 'div' && elem.classList.contains('its-page-drawing')) {
+      const data = parseDrawingData(elem.getAttribute('data-drawing'));
+      if (data.items.length > 0) {
+        out += `\n[Annotazioni e disegni sulla pagina]\n\n`;
+      }
+    } else if (tag === 'div' && elem.classList.contains('its-drawing-block')) {
+      out += `\n[Disegno a mano]\n\n`;
     } else if (tag === 'table') {
       const rows = Array.from(elem.querySelectorAll('tr'));
       rows.forEach((tr, rIdx) => {
@@ -127,7 +136,32 @@ export function exportActiveNoteToMarkdown(
   downloadTextFile(md, `${sanitizeFilename(title)}.md`, 'text/markdown;charset=utf-8');
 }
 
+function prepareExportHtmlWithPageDrawing(htmlContent: string): string {
+  const container = document.createElement('div');
+  container.innerHTML = htmlContent || '';
+  const pageDrawingEls = Array.from(container.querySelectorAll('.its-page-drawing'));
+  if (pageDrawingEls.length === 0) {
+    return htmlContent;
+  }
+
+  let overlaySvg = '';
+  pageDrawingEls.forEach((el) => {
+    const data = parseDrawingData(el.getAttribute('data-drawing'));
+    if (data.items.length > 0 || data.bg !== 'blank') {
+      overlaySvg += renderDrawingToSvgString(data, { transparentBg: true, isDark: false });
+    }
+    el.remove();
+  });
+
+  if (!overlaySvg) {
+    return container.innerHTML;
+  }
+
+  return `<div class="its-export-page"><div class="its-export-body">${container.innerHTML}</div><div class="its-page-drawing-overlay">${overlaySvg}</div></div>`;
+}
+
 export function exportActiveNoteToHTML(title: string, htmlContent: string): void {
+  const renderedContent = prepareExportHtmlWithPageDrawing(htmlContent);
   const docHtml = `<!DOCTYPE html>
 <html lang="it">
 <head>
@@ -144,7 +178,12 @@ p { margin: 0.5rem 0; }
 ul { list-style-type: disc; padding-left: 1.5rem; margin: 0.5rem 0; }
 ol { list-style-type: decimal; padding-left: 1.5rem; margin: 0.5rem 0; }
 li { margin: 0.25rem 0; }
+.its-export-page { display: grid; grid-template-columns: minmax(0, 1fr); position: relative; min-height: 480px; }
+.its-export-body { grid-area: 1 / 1; position: relative; z-index: 1; min-width: 0; }
+.its-page-drawing-overlay { grid-area: 1 / 1; position: relative; z-index: 10; pointer-events: none; min-width: 0; }
 .its-callout { border: 1px solid #bfdbfe; background-color: #eff6ff; padding: 0.75rem 1rem; border-radius: 0.625rem; margin: 0.75rem 0; }
+.its-drawing-block { border: 1px solid #cbd5e1; border-radius: 0.75rem; background: #ffffff; margin: 0.85rem 0; overflow: hidden; }
+.its-drawing-svg { width: 100%; height: auto; display: block; }
 pre { background-color: #18181b; color: #e4e4e7; padding: 0.85rem 1rem; border-radius: 0.625rem; overflow-x: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
 code:not(pre code) { background-color: #f1f5f9; padding: 0.1rem 0.35rem; border-radius: 0.25rem; font-family: 'JetBrains Mono', monospace; font-size: 0.85em; }
 table.its-table { width: 100%; border-collapse: collapse; margin: 0.85rem 0; font-size: 0.85rem; }
@@ -153,7 +192,7 @@ table.its-table th { background-color: #f8fafc; font-weight: 600; }
 </style>
 </head>
 <body>
-${htmlContent}
+${renderedContent}
 </body>
 </html>`;
   downloadTextFile(docHtml, `${sanitizeFilename(title)}.html`, 'text/html;charset=utf-8');
@@ -164,6 +203,7 @@ export function exportActiveNoteToPDF(
   subjectName: string,
   htmlContent: string,
 ): void {
+  const renderedContent = prepareExportHtmlWithPageDrawing(htmlContent);
   const iframe = document.createElement('iframe');
   iframe.style.position = 'fixed';
   iframe.style.right = '0';
@@ -191,7 +231,12 @@ export function exportActiveNoteToPDF(
     ul { list-style-type: disc; padding-left: 24px; margin: 12px 0; }
     ol { list-style-type: decimal; padding-left: 24px; margin: 12px 0; }
     li { margin: 6px 0; }
+    .its-export-page { display: grid; grid-template-columns: minmax(0, 1fr); position: relative; min-height: 480px; }
+    .its-export-body { grid-area: 1 / 1; position: relative; z-index: 1; min-width: 0; }
+    .its-page-drawing-overlay { grid-area: 1 / 1; position: relative; z-index: 10; pointer-events: none; min-width: 0; }
     .its-callout { border: 1px solid #bfdbfe; background-color: #eff6ff; padding: 12px 16px; border-radius: 8px; margin: 14px 0; }
+    .its-drawing-block { border: 1px solid #cbd5e1; border-radius: 10px; background: #ffffff; margin: 16px 0; overflow: hidden; break-inside: avoid; }
+    .its-drawing-svg { width: 100%; height: auto; display: block; }
     pre { background-color: #18181b; color: #e4e4e7; padding: 12px 14px; border-radius: 8px; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
     table.its-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
     table.its-table th, table.its-table td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: left; }
@@ -201,7 +246,7 @@ export function exportActiveNoteToPDF(
 </head>
 <body>
   <div class="meta"><strong>ITS Study Assistant</strong> · Materia: ${escapeHtml(subjectName)} · Documento: ${escapeHtml(title)}</div>
-  ${htmlContent}
+  ${renderedContent}
 </body>
 </html>`;
 

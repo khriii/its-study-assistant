@@ -29,7 +29,7 @@ import {
   Upload,
   User as UserIcon,
 } from 'lucide-react';
-import { LAYOUT_PRESETS, WORKSPACE_WINDOWS } from '../constants/defaults';
+import { APP_VERSION, LAYOUT_PRESETS, WORKSPACE_WINDOWS } from '../constants/defaults';
 import type { LayoutPresetId, Subject, ThemeMode, WindowId } from '../types';
 
 interface TopHeaderProps {
@@ -143,7 +143,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
               ITS Study Assistant
             </span>
             <span className="text-[10px] font-mono font-medium text-slate-400 dark:text-vscode-textMuted leading-none mt-0.5">
-              v1.0.3
+              {APP_VERSION}
             </span>
           </div>
         </div>

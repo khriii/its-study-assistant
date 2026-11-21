@@ -1,17 +1,26 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  ArrowUpRight,
   Ban,
   Bold,
+  Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
+  Circle,
   Code,
   Columns3,
   Download,
+  Eraser,
   FileCode2,
   FilePlus2,
   FileText,
+  Gauge,
+  Grid3X3,
   GripVertical,
+  Hand,
   Highlighter,
   Italic,
   Lightbulb,
@@ -20,17 +29,27 @@ import {
   Maximize2,
   Minimize2,
   Minus,
+  PaintBucket,
   PanelTop,
+  PenTool,
+  Pencil,
+  PencilLine,
   Plus,
   Quote,
+  Redo2,
   Replace,
+  RotateCcw,
   Rows3,
+  Ruler,
   Search,
   Sparkles,
+  Square,
   Table as TableIcon,
   Trash2,
+  Triangle,
   Type as TypeIcon,
   Underline,
+  Undo2,
   X,
 } from 'lucide-react';
 import { HIGHLIGHT_SWATCHES, PRESET_TEXT_COLORS } from '../constants/defaults';
@@ -43,12 +62,30 @@ import {
   type CodeLanguage,
 } from '../utils/codeSyntax';
 import {
+  createEmptyDrawingData,
+  DEFAULT_DRAWING_HEIGHT,
+  DEFAULT_DRAWING_TOOLBAR_STATE,
+  DRAWING_VIEWBOX_WIDTH,
+  getDrawingMaxY,
+  getDrawingSizeCategory,
+  getToolStrokeSize,
+  parseDrawingData,
+  serializeDrawingData,
+  updateToolStrokeSize,
+  type DrawingBackground,
+  type DrawingData,
+  type DrawingItem,
+  type DrawingTool,
+  type DrawingToolbarState,
+} from '../utils/drawing';
+import {
   exportActiveNoteToHTML,
   exportActiveNoteToMarkdown,
   exportActiveNoteToPDF,
   stripHtml,
 } from '../utils/exporters';
 import { CodeBlockWidget } from './CodeBlockWidget';
+import { PageDrawingOverlay, type PageDrawingHandle } from './PageDrawingOverlay';
 import { PresetColorPicker } from './PresetColorPicker';
 import type { Note, PanelWindowActions } from '../types';
 
@@ -109,6 +146,89 @@ function getThemeDefaultTextColor(): string {
     return '#ffffff';
   }
   return '#0f172a';
+}
+
+function splitNoteHtmlAndDrawing(rawHtml: string): {
+  bodyHtml: string;
+  drawingData: DrawingData;
+} {
+  if (!rawHtml) {
+    return { bodyHtml: '', drawingData: createEmptyDrawingData('blank') };
+  }
+  const container = document.createElement('div');
+  container.innerHTML = rawHtml;
+
+  const pageEls = Array.from(container.querySelectorAll('.its-page-drawing'));
+  let drawingData: DrawingData | null = null;
+
+  for (const el of pageEls) {
+    const parsed = parseDrawingData(el.getAttribute('data-drawing'));
+    if (!drawingData) {
+      drawingData = parsed;
+    } else {
+      drawingData = {
+        height: Math.max(drawingData.height, parsed.height),
+        bg: parsed.bg !== 'blank' ? parsed.bg : drawingData.bg,
+        items: [...drawingData.items, ...parsed.items],
+      };
+    }
+    el.remove();
+  }
+
+  // Backwards migration: lift any legacy .its-drawing-block widgets into page drawing overlay
+  const legacyBlocks = Array.from(container.querySelectorAll('.its-drawing-block'));
+  if (legacyBlocks.length > 0) {
+    let accBg: DrawingBackground = drawingData?.bg ?? 'blank';
+    const migratedItems: DrawingItem[] = drawingData ? [...drawingData.items] : [];
+    let yOffset = drawingData ? getDrawingMaxY(drawingData) + 24 : 24;
+
+    for (const el of legacyBlocks) {
+      const parsed = parseDrawingData(el.getAttribute('data-drawing'));
+      if (accBg === 'blank' && parsed.bg !== 'blank') {
+        accBg = parsed.bg;
+      }
+      for (const item of parsed.items) {
+        switch (item.type) {
+          case 'path':
+          case 'highlighter':
+            migratedItems.push({
+              ...item,
+              points: item.points.map(([x, y, p]) => [x, y + yOffset, p]),
+            });
+            break;
+          case 'line':
+          case 'arrow':
+            migratedItems.push({
+              ...item,
+              y1: item.y1 + yOffset,
+              y2: item.y2 + yOffset,
+            });
+            break;
+          case 'rect':
+          case 'circle':
+          case 'triangle':
+            migratedItems.push({
+              ...item,
+              y: item.y + yOffset,
+            });
+            break;
+        }
+      }
+      yOffset += parsed.height + 24;
+      el.remove();
+    }
+
+    drawingData = {
+      height: Math.max(drawingData?.height ?? 480, yOffset),
+      bg: accBg,
+      items: migratedItems,
+    };
+  }
+
+  return {
+    bodyHtml: container.innerHTML,
+    drawingData: drawingData || createEmptyDrawingData('blank'),
+  };
 }
 
 function normalizeCssColorToHex(color: string | null | undefined): string | null {
@@ -304,11 +424,15 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
   onClosePanel,
   onSwitchToTabs,
 }) => {
+  const pageScrollRef = useRef<HTMLDivElement>(null);
+  const pageWrapperRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
+  const pageDrawingRef = useRef<PageDrawingHandle>(null);
   const savedRangeRef = useRef<Range | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchMatchesRef = useRef<HTMLElement[]>([]);
   const loadedNoteIdRef = useRef<string | null>(null);
+  const lastEmittedHtmlRef = useRef<{ id: string; html: string } | null>(null);
   const activeTableCellRef = useRef<HTMLTableCellElement | null>(null);
   const codeBlocksMapRef = useRef<Map<string, CodeBlockEntry>>(new Map());
   const cbCounterRef = useRef(0);
@@ -327,6 +451,35 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
   const [codeBlocks, setCodeBlocks] = useState<CodeBlockEntry[]>([]);
   const [codeColorScheme, setCodeColorScheme] = useState<CodeColorScheme>(() =>
     loadSavedCodeColors(),
+  );
+
+  // Full-Page Transparent Drawing Overlay & Drawing Mode toolbar state
+  const [pageDrawing, setPageDrawing] = useState<DrawingData>(() =>
+    createEmptyDrawingData('blank'),
+  );
+  const pageDrawingStateRef = useRef<DrawingData>(pageDrawing);
+  pageDrawingStateRef.current = pageDrawing;
+  const [pageWrapperWidth, setPageWrapperWidth] = useState(DRAWING_VIEWBOX_WIDTH);
+  const [drawingMode, setDrawingMode] = useState(false);
+  const [drawingToolState, setDrawingToolState] = useState<DrawingToolbarState>(
+    DEFAULT_DRAWING_TOOLBAR_STATE,
+  );
+  const [drawingHistoryInfo, setDrawingHistoryInfo] = useState<{
+    canUndo: boolean;
+    canRedo: boolean;
+    itemCount: number;
+  }>({ canUndo: false, canRedo: false, itemCount: 0 });
+  const [drawingSizeMenuOpen, setDrawingSizeMenuOpen] = useState(false);
+  const [drawingBgMenuOpen, setDrawingBgMenuOpen] = useState(false);
+  const [drawingSizeInput, setDrawingSizeInput] = useState('3');
+  const [liveDrawingVirtualHeight, setLiveDrawingVirtualHeight] = useState(0);
+  const drawingSizeBtnRef = useRef<HTMLButtonElement>(null);
+  const drawingBgBtnRef = useRef<HTMLButtonElement>(null);
+  const [drawingSizeMenuPos, setDrawingSizeMenuPos] = useState<{ top: number; left: number } | null>(
+    null,
+  );
+  const [drawingBgMenuPos, setDrawingBgMenuPos] = useState<{ top: number; left: number } | null>(
+    null,
   );
 
   // Tab drag-reorder state (single slot index across tabs bar: 0..visibleTabs.length)
@@ -348,7 +501,7 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
     text: string;
   }>({ visible: false, x: 0, y: 0, text: '' });
 
-  // Sync default text color with active theme (white in dark mode, ink black in light mode)
+  // Sync default text color with active theme
   useEffect(() => {
     const syncThemeColor = () => {
       if (!hasCustomTextColorRef.current) {
@@ -362,6 +515,22 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
       attributeFilter: ['class'],
     });
     return () => observer.disconnect();
+  }, []);
+
+  // Track page width so drawn strokes can expand page min-height smoothly
+  useEffect(() => {
+    const wrapper = pageWrapperRef.current;
+    if (!wrapper) return;
+    const updateWidth = () => {
+      const rect = wrapper.getBoundingClientRect();
+      if (rect.width > 40) {
+        setPageWrapperWidth(rect.width);
+      }
+    };
+    updateWidth();
+    const ro = new ResizeObserver(updateWidth);
+    ro.observe(wrapper);
+    return () => ro.disconnect();
   }, []);
 
   const stripHighlightsFromDom = useCallback(() => {
@@ -382,6 +551,7 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
     clone.querySelectorAll('mark.search-highlight').forEach((mark) => {
       mark.replaceWith(document.createTextNode(mark.textContent || ''));
     });
+    clone.querySelectorAll('.its-page-drawing, .its-drawing-block').forEach((n) => n.remove());
     clone.querySelectorAll('.its-code-host').forEach((host) => {
       const cbId = host.getAttribute('data-cb-id') || '';
       const entry = codeBlocksMapRef.current.get(cbId);
@@ -395,6 +565,14 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
       pre.appendChild(codeEl);
       host.replaceWith(pre);
     });
+    const curDrawing = pageDrawingStateRef.current;
+    if (curDrawing.items.length > 0 || curDrawing.bg !== 'blank') {
+      const div = document.createElement('div');
+      div.className = 'its-page-drawing';
+      div.setAttribute('data-drawing', serializeDrawingData(curDrawing));
+      div.setAttribute('hidden', '');
+      clone.appendChild(div);
+    }
     clone.normalize();
     return clone.innerHTML;
   }, []);
@@ -586,16 +764,22 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
     return () => document.removeEventListener('selectionchange', handleSelectionChange);
   }, [syncSelectionState]);
 
-  // Load active note into contentEditable when activeNote changes
+  // Load active note into contentEditable + pageDrawing overlay when activeNote changes
   useEffect(() => {
     const el = editorRef.current;
     if (!el) return;
 
     if (!activeNote) {
       loadedNoteIdRef.current = null;
+      lastEmittedHtmlRef.current = null;
       activeTableCellRef.current = null;
       codeBlocksMapRef.current.clear();
       setCodeBlocks([]);
+      const emptyDrawing = createEmptyDrawingData('blank');
+      pageDrawingStateRef.current = emptyDrawing;
+      setPageDrawing(emptyDrawing);
+      setDrawingMode(false);
+      setDrawingHistoryInfo({ canUndo: false, canRedo: false, itemCount: 0 });
       el.innerHTML = '';
       setWordCount(0);
       setActiveFormats(DEFAULT_FORMATS);
@@ -605,18 +789,41 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
 
     const isDifferentNote = loadedNoteIdRef.current !== activeNote.id;
     const isFocusedInside = el.contains(document.activeElement);
+    const isLocallyOwned =
+      lastEmittedHtmlRef.current?.id === activeNote.id &&
+      lastEmittedHtmlRef.current.html === (activeNote.content || '');
 
-    if (isDifferentNote || (!isFocusedInside && getCleanHtml() !== activeNote.content)) {
+    if (
+      isDifferentNote ||
+      (!isFocusedInside &&
+        !drawingMode &&
+        saveStatus === 'Salvato' &&
+        !isLocallyOwned &&
+        getCleanHtml() !== activeNote.content)
+    ) {
       loadedNoteIdRef.current = activeNote.id;
+      if (isDifferentNote) {
+        lastEmittedHtmlRef.current = null;
+      }
       codeBlocksMapRef.current.clear();
       setCodeBlocks([]);
-      el.innerHTML = activeNote.content || '';
+      const { bodyHtml, drawingData } = splitNoteHtmlAndDrawing(activeNote.content || '');
+      pageDrawingStateRef.current = drawingData;
+      setPageDrawing(drawingData);
+      setDrawingToolState((prev) => ({ ...prev, bg: drawingData.bg }));
+      setDrawingHistoryInfo({
+        canUndo: false,
+        canRedo: false,
+        itemCount: drawingData.items.length,
+      });
+      el.innerHTML = bodyHtml;
       syncCodeBlocksFromDom();
       updateWordCount();
       if (isDifferentNote) {
         activeTableCellRef.current = null;
         pendingTypedColorRef.current = null;
         hasCustomTextColorRef.current = false;
+        setDrawingMode(false);
         setSelectedTextColor(getThemeDefaultTextColor());
         setActiveFormats(DEFAULT_FORMATS);
         setSearchOpen(false);
@@ -627,7 +834,7 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
         searchMatchesRef.current = [];
       }
     }
-  }, [activeNote, getCleanHtml, syncCodeBlocksFromDom, updateWordCount]);
+  }, [activeNote, drawingMode, saveStatus, getCleanHtml, syncCodeBlocksFromDom, updateWordCount]);
 
   useEffect(() => {
     if (searchTriggerToken > 0 && activeNote) {
@@ -644,12 +851,22 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
       const target = e.target as HTMLElement;
       if (!target.closest('[data-highlight-menu]')) setHighlightMenuOpen(false);
       if (!target.closest('[data-export-menu]')) setExportMenuOpen(false);
+      if (!target.closest('[data-drawing-size-menu]')) setDrawingSizeMenuOpen(false);
+      if (!target.closest('[data-drawing-bg-menu]')) setDrawingBgMenuOpen(false);
       if (!target.closest('[data-selection-toolbar]')) {
         setSelectionMenu((prev) => (prev.visible ? { ...prev, visible: false } : prev));
       }
     };
+    const handleResize = () => {
+      setDrawingSizeMenuOpen(false);
+      setDrawingBgMenuOpen(false);
+    };
     document.addEventListener('mousedown', handleOutside);
-    return () => document.removeEventListener('mousedown', handleOutside);
+    window.addEventListener('resize', handleResize);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      window.removeEventListener('resize', handleResize);
+    };
   }, []);
 
   const saveSelection = useCallback(() => {
@@ -750,7 +967,9 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
       acceptNode: (node) => {
         const parent = node.parentElement;
-        if (!parent || parent.closest('.its-code-host')) return NodeFilter.FILTER_REJECT;
+        if (!parent || parent.closest('.its-code-host')) {
+          return NodeFilter.FILTER_REJECT;
+        }
         return NodeFilter.FILTER_ACCEPT;
       },
     });
@@ -803,8 +1022,10 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
 
   const notifyContentChanged = useCallback(() => {
     if (!activeNote) return;
+    const cleanHtml = getCleanHtml();
+    lastEmittedHtmlRef.current = { id: activeNote.id, html: cleanHtml };
     updateWordCount();
-    onChangeContent(activeNote.id, getCleanHtml());
+    onChangeContent(activeNote.id, cleanHtml);
   }, [activeNote, getCleanHtml, onChangeContent, updateWordCount]);
 
   // CodeBlock callbacks
@@ -861,6 +1082,88 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
       inCodeBlock: true,
     });
   }, []);
+
+  // Full-Page Drawing callbacks & toolbar mode controls
+  const handlePageDrawingChange = useCallback(
+    (nextData: DrawingData) => {
+      pageDrawingStateRef.current = nextData;
+      setPageDrawing(nextData);
+      notifyContentChanged();
+    },
+    [notifyContentChanged],
+  );
+
+  const computeFloatingMenuPos = useCallback(
+    (
+      triggerEl: HTMLElement | null,
+      menuW: number,
+      menuH: number,
+      preferRightAlign = false,
+    ) => {
+      if (!triggerEl) return { top: 84, left: 16 };
+      const rect = triggerEl.getBoundingClientRect();
+      const margin = 8;
+      let left = preferRightAlign ? rect.right - menuW : rect.left;
+      left = Math.max(margin, Math.min(window.innerWidth - menuW - margin, left));
+      let top = rect.bottom + 6;
+      if (top + menuH > window.innerHeight - margin) {
+        top = Math.max(margin, rect.top - menuH - 6);
+      }
+      return { top, left };
+    },
+    [],
+  );
+
+  const handleOpenDrawingTool = useCallback(() => {
+    if (!activeNote) return;
+    setHighlightMenuOpen(false);
+    setExportMenuOpen(false);
+    setDrawingSizeMenuOpen(false);
+    setDrawingBgMenuOpen(false);
+    setSelectionMenu((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+    // Clear active table state & browser selection so neither table toolbar nor text selection lingers in draw mode
+    activeTableCellRef.current = null;
+    setActiveFormats((prev) => (prev.inTable ? { ...prev, inTable: false } : prev));
+    window.getSelection()?.removeAllRanges();
+    if (
+      document.activeElement instanceof HTMLElement &&
+      editorRef.current?.contains(document.activeElement)
+    ) {
+      document.activeElement.blur();
+    }
+    setDrawingToolState((prev) => ({
+      ...prev,
+      bg: pageDrawingStateRef.current.bg,
+    }));
+    const info = pageDrawingRef.current?.getHistoryState();
+    if (info) {
+      setDrawingHistoryInfo(info);
+    }
+    setDrawingMode(true);
+  }, [activeNote]);
+
+  // Keyboard shortcuts while drawing mode is active (Esc exits, Ctrl+Z / Ctrl+Y undo/redo)
+  useEffect(() => {
+    if (!drawingMode) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (searchOpen && document.activeElement === searchInputRef.current) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setDrawingMode(false);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) pageDrawingRef.current?.redo();
+        else pageDrawingRef.current?.undo();
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        pageDrawingRef.current?.redo();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [drawingMode, searchOpen]);
 
   const formatDoc = (cmd: string, value?: string) => {
     const el = editorRef.current;
@@ -940,7 +1243,12 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
       const single = anchorEl?.closest(
         'h1, h2, h3, p, div:not(.its-callout):not(.its-code-host)',
       ) as HTMLElement | null;
-      if (single && el.contains(single) && !single.closest('.its-code-host, .its-callout, table')) {
+      if (
+        single &&
+        single !== el &&
+        el.contains(single) &&
+        !single.closest('.its-code-host, .its-callout, table')
+      ) {
         targetBlocks = [single];
       }
     } else {
@@ -963,7 +1271,22 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
     }
 
     if (targetBlocks.length === 0) {
-      formatDoc('formatBlock', tag);
+      // Fallback: wrap loose selection or caret content cleanly inside a single block
+      const fallbackBlock = document.createElement(tag.toLowerCase());
+      const anchorNode = range.startContainer;
+      if (anchorNode.nodeType === Node.TEXT_NODE && anchorNode.parentNode === el) {
+        anchorNode.parentNode.insertBefore(fallbackBlock, anchorNode);
+        fallbackBlock.appendChild(anchorNode);
+      } else {
+        fallbackBlock.innerHTML = '<br>';
+        el.appendChild(fallbackBlock);
+      }
+      const fallbackRange = document.createRange();
+      fallbackRange.selectNodeContents(fallbackBlock);
+      sel.removeAllRanges();
+      sel.addRange(fallbackRange);
+      syncSelectionState();
+      notifyContentChanged();
       return;
     }
 
@@ -976,13 +1299,56 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
     const endOffset = range.endOffset;
     const blockSwapMap = new Map<Node, HTMLElement>();
 
+    // Strip any leftover inline font-size or accidental nested block/heading wrappers inside a converted block
+    const cleanBlockFontSizesAndNesting = (root: HTMLElement) => {
+      root.style.fontSize = '';
+      if (!root.getAttribute('style')?.trim()) {
+        root.removeAttribute('style');
+      }
+      Array.from(root.querySelectorAll('h1, h2, h3, p, div')).forEach((nested) => {
+        if (nested.closest('.its-code-host, .its-callout, table')) return;
+        const parent = nested.parentNode;
+        if (!parent) return;
+        while (nested.firstChild) {
+          parent.insertBefore(nested.firstChild, nested);
+        }
+        parent.removeChild(nested);
+      });
+      Array.from(root.querySelectorAll('span, font')).forEach((inlineEl) => {
+        if (inlineEl.closest('.its-code-host, .its-callout')) return;
+        const htmlEl = inlineEl as HTMLElement;
+        if (htmlEl.style.fontSize) {
+          htmlEl.style.fontSize = '';
+        }
+        if (htmlEl.hasAttribute('size')) {
+          htmlEl.removeAttribute('size');
+        }
+        if (htmlEl.getAttribute('style') !== null && !htmlEl.getAttribute('style')?.trim()) {
+          htmlEl.removeAttribute('style');
+        }
+        if (htmlEl.attributes.length === 0) {
+          const parent = htmlEl.parentNode;
+          if (parent) {
+            while (htmlEl.firstChild) {
+              parent.insertBefore(htmlEl.firstChild, htmlEl);
+            }
+            parent.removeChild(htmlEl);
+          }
+        }
+      });
+    };
+
     // Convert each selected block individually so paragraph separation is NEVER collapsed
     targetBlocks.forEach((block) => {
-      if (block.tagName.toLowerCase() === nextTag) return;
+      if (block.tagName.toLowerCase() === nextTag) {
+        cleanBlockFontSizesAndNesting(block);
+        return;
+      }
       const replacement = document.createElement(nextTag);
       while (block.firstChild) {
         replacement.appendChild(block.firstChild);
       }
+      cleanBlockFontSizesAndNesting(replacement);
       if (!replacement.hasChildNodes()) {
         replacement.innerHTML = '<br>';
       }
@@ -1247,7 +1613,7 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
 
   // External Paste Sanitization
   const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
-    if (!activeNote) return;
+    if (!activeNote || drawingMode) return;
     if ((e.target as HTMLElement).closest('.its-code-host')) return;
 
     const plainText = e.clipboardData.getData('text/plain');
@@ -1416,6 +1782,10 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
   };
 
   const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (drawingMode) {
+      e.preventDefault();
+      return;
+    }
     if ((e.target as HTMLElement).closest('.its-code-host') || isFocusOrSelectionInCodeBlock()) {
       return;
     }
@@ -1454,7 +1824,15 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
         }
       }
 
-      if (pointRange && el.contains(pointRange.startContainer) && !((pointRange.startContainer instanceof Element ? pointRange.startContainer : pointRange.startContainer.parentElement)?.closest('.its-code-host'))) {
+      if (
+        pointRange &&
+        el.contains(pointRange.startContainer) &&
+        !(
+          pointRange.startContainer instanceof Element
+            ? pointRange.startContainer
+            : pointRange.startContainer.parentElement
+        )?.closest('.its-code-host')
+      ) {
         if (sel) {
           sel.removeAllRanges();
           sel.addRange(pointRange);
@@ -1470,6 +1848,7 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
   };
 
   const handleTouchOrMouseSelection = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (drawingMode) return;
     if ((e.target as HTMLElement).closest('.its-code-host')) {
       handleFocusCodeBlock();
       return;
@@ -1485,6 +1864,50 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
   };
 
   const toolbarDisabled = !activeNote || activeFormats.inCodeBlock;
+  const activeDrawingSize = getToolStrokeSize(drawingToolState);
+  const activeSizeCategory = getDrawingSizeCategory(drawingToolState.tool);
+
+  useEffect(() => {
+    setDrawingSizeInput(String(activeDrawingSize));
+  }, [activeDrawingSize, activeSizeCategory]);
+
+  useEffect(() => {
+    if (!drawingMode) {
+      setLiveDrawingVirtualHeight(0);
+    }
+  }, [drawingMode, activeNote?.id]);
+
+  const commitDrawingSizeInput = () => {
+    const parsed = Number(drawingSizeInput.trim());
+    if (Number.isFinite(parsed) && parsed >= 1) {
+      const clamped = Math.max(1, Math.min(22, Math.round(parsed)));
+      setDrawingToolState((prev) => updateToolStrokeSize(prev, clamped));
+      setDrawingSizeInput(String(clamped));
+    } else {
+      setDrawingSizeInput(String(activeDrawingSize));
+    }
+  };
+
+  const sizeCategoryLabel: Record<typeof activeSizeCategory, string> = {
+    pencil: 'Matita',
+    'smooth-pen': 'Tratto Fluido',
+    highlighter: 'Evidenziatore',
+    eraser: 'Gomma',
+    shapes: 'Forme e Linee',
+  };
+  const pageScale = pageWrapperWidth / DRAWING_VIEWBOX_WIDTH;
+  const maxDrawnY = getDrawingMaxY(pageDrawing);
+  const minDrawingVirtualH = drawingMode
+    ? Math.max(
+        DEFAULT_DRAWING_HEIGHT,
+        maxDrawnY > 0 ? maxDrawnY + 180 : 0,
+        liveDrawingVirtualHeight,
+      )
+    : maxDrawnY > 0
+      ? maxDrawnY + 160
+      : 0;
+  const pageOverlayMinHeight =
+    minDrawingVirtualH > 0 ? Math.ceil(minDrawingVirtualH * pageScale) : 0;
 
   const toolbarBtnClass = (isActive: boolean) =>
     `w-7 h-7 flex items-center justify-center rounded transition ${
@@ -1704,313 +2127,703 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
         );
       })()}
 
-      {/* Formatting Toolbar */}
-      <div className="bg-slate-100 dark:bg-vscode-sidebar border-b border-slate-200 dark:border-vscode-border p-1.5 flex gap-1 items-center flex-none flex-wrap">
-        <button
-          type="button"
-          disabled={toolbarDisabled}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => formatDoc('bold')}
-          className={toolbarBtnClass(activeFormats.bold)}
-          title={
-            toolbarDisabled
-              ? 'Formattazione disabilitata nei blocchi codice'
-              : 'Grassetto'
-          }
-        >
-          <Bold className="w-3.5 h-3.5" />
-        </button>
-        <button
-          type="button"
-          disabled={toolbarDisabled}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => formatDoc('italic')}
-          className={toolbarBtnClass(activeFormats.italic)}
-          title={
-            toolbarDisabled
-              ? 'Formattazione disabilitata nei blocchi codice'
-              : 'Corsivo'
-          }
-        >
-          <Italic className="w-3.5 h-3.5" />
-        </button>
-        <button
-          type="button"
-          disabled={toolbarDisabled}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => formatDoc('underline')}
-          className={toolbarBtnClass(activeFormats.underline)}
-          title={
-            toolbarDisabled
-              ? 'Formattazione disabilitata nei blocchi codice'
-              : 'Sottolineato'
-          }
-        >
-          <Underline className="w-3.5 h-3.5" />
-        </button>
+      {/* Toolbar: Swaps between Text Formatting Toolbar and Dedicated Drawing Toolbar */}
+      {drawingMode && activeNote ? (
+        <div className="bg-slate-100 dark:bg-vscode-sidebar border-b border-slate-200 dark:border-vscode-border p-1.5 flex gap-1 items-center flex-none flex-wrap">
+          {/* Done / Exit Drawing Mode */}
+          <button
+            type="button"
+            onClick={() => setDrawingMode(false)}
+            className="h-7 px-2.5 accent-btn rounded text-xs font-semibold flex items-center gap-1 shadow-xs transition cursor-pointer shrink-0"
+            title="Torna agli strumenti di testo (Esc)"
+          >
+            <Check className="w-3.5 h-3.5" />
+            <span>Fatto</span>
+          </button>
 
-        <div className="w-px h-4 bg-slate-300 dark:bg-vscode-borderLight mx-0.5" />
+          <div className="w-px h-4 bg-slate-300 dark:bg-vscode-borderLight mx-0.5" />
 
-        {/* Text Color Preset Menu (no color wheel) */}
-        <div
-          className={toolbarDisabled ? 'pointer-events-none opacity-40' : ''}
-          onMouseDown={saveSelection}
-        >
+          {/* Freehand & Eraser Tools */}
+          {(
+            [
+              { id: 'pencil', label: 'Matita / Penna', icon: Pencil },
+              {
+                id: 'smooth-pen',
+                label: 'Tratto Fluido (matita stabilizzata senza tremolii)',
+                icon: PencilLine,
+              },
+              { id: 'highlighter', label: 'Evidenziatore', icon: Highlighter },
+              { id: 'eraser', label: 'Gomma', icon: Eraser },
+            ] as { id: DrawingTool; label: string; icon: React.ComponentType<{ className?: string }> }[]
+          ).map(({ id: toolId, label, icon: Icon }) => {
+            const active = drawingToolState.tool === toolId;
+            return (
+              <button
+                key={toolId}
+                type="button"
+                onClick={() =>
+                  setDrawingToolState((prev) => ({ ...prev, tool: toolId }))
+                }
+                className={`w-7 h-7 flex items-center justify-center rounded border transition cursor-pointer ${
+                  active
+                    ? 'accent-toolbar-active'
+                    : 'border-transparent text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight'
+                }`}
+                title={label}
+              >
+                <Icon className="w-3.5 h-3.5" />
+              </button>
+            );
+          })}
+
+          <div className="w-px h-4 bg-slate-300 dark:bg-vscode-borderLight mx-0.5" />
+
+          {/* Geometry Shapes */}
+          <button
+            type="button"
+            onClick={() => setDrawingToolState((prev) => ({ ...prev, tool: 'line' }))}
+            className={`w-7 h-7 flex items-center justify-center rounded border transition cursor-pointer ${
+              drawingToolState.tool === 'line'
+                ? 'accent-toolbar-active'
+                : 'border-transparent text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight'
+            }`}
+            title="Linea dritta (tieni Shift per angoli di 15°)"
+          >
+            <Minus className="w-3.5 h-3.5 -rotate-45" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setDrawingToolState((prev) => ({ ...prev, tool: 'arrow' }))}
+            className={`w-7 h-7 flex items-center justify-center rounded border transition cursor-pointer ${
+              drawingToolState.tool === 'arrow'
+                ? 'accent-toolbar-active'
+                : 'border-transparent text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight'
+            }`}
+            title="Freccia"
+          >
+            <ArrowUpRight className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setDrawingToolState((prev) => ({ ...prev, tool: 'rect' }))}
+            className={`w-7 h-7 flex items-center justify-center rounded border transition cursor-pointer ${
+              drawingToolState.tool === 'rect'
+                ? 'accent-toolbar-active'
+                : 'border-transparent text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight'
+            }`}
+            title="Rettangolo (tieni Shift per Quadrato)"
+          >
+            <Square className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setDrawingToolState((prev) => ({ ...prev, tool: 'circle' }))}
+            className={`w-7 h-7 flex items-center justify-center rounded border transition cursor-pointer ${
+              drawingToolState.tool === 'circle'
+                ? 'accent-toolbar-active'
+                : 'border-transparent text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight'
+            }`}
+            title="Cerchio / Ellisse (tieni Shift per Cerchio perfetto)"
+          >
+            <Circle className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setDrawingToolState((prev) => ({ ...prev, tool: 'triangle' }))}
+            className={`w-7 h-7 flex items-center justify-center rounded border transition cursor-pointer ${
+              drawingToolState.tool === 'triangle'
+                ? 'accent-toolbar-active'
+                : 'border-transparent text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight'
+            }`}
+            title="Triangolo"
+          >
+            <Triangle className="w-3.5 h-3.5" />
+          </button>
+
+          <div className="w-px h-4 bg-slate-300 dark:bg-vscode-borderLight mx-0.5" />
+
+          {/* Color Picker */}
           <PresetColorPicker
-            value={selectedTextColor}
+            value={drawingToolState.color === 'auto' ? undefined : drawingToolState.color}
             presets={PRESET_TEXT_COLORS}
-            onSelect={(c) => applyColor(c)}
-            onReset={() => resetTextColor()}
-            resetLabel="Ripristina colore"
-            title={
-              toolbarDisabled
-                ? 'Colore testo disabilitato nei blocchi codice'
-                : 'Colore Testo'
+            onSelect={(c) => setDrawingToolState((prev) => ({ ...prev, color: c }))}
+            onReset={() => setDrawingToolState((prev) => ({ ...prev, color: 'auto' }))}
+            resetLabel="Automatico (Chiaro ↔ Scuro)"
+            isResetActive={drawingToolState.color === 'auto'}
+            resetIcon={
+              <span
+                className="w-5 h-5 rounded-full border-2 border-slate-400 dark:border-slate-300 shadow-xs shrink-0"
+                style={{
+                  background: 'linear-gradient(135deg, #0f172a 50%, #f8fafc 50%)',
+                }}
+              />
             }
-            triggerClassName="w-7 h-7 flex flex-col items-center justify-center text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight rounded transition cursor-pointer"
+            title={
+              drawingToolState.color === 'auto'
+                ? 'Colore automatico (nero su sfondo chiaro, bianco su sfondo scuro)'
+                : 'Colore tratto / forma'
+            }
+            triggerClassName="w-7 h-7 rounded border border-slate-200 dark:border-vscode-borderLight bg-white dark:bg-vscode-input hover:bg-slate-50 dark:hover:bg-vscode-hover flex items-center justify-center transition cursor-pointer shadow-xs"
             trigger={
-              <>
-                <TypeIcon className="w-3.5 h-3.5" />
+              drawingToolState.color === 'auto' ? (
                 <span
-                  className="w-3.5 h-0.5 rounded-full mt-0.5 border border-black/15 dark:border-white/25"
-                  style={{ backgroundColor: selectedTextColor }}
+                  className="w-4.5 h-4.5 rounded-full border-2 border-slate-400 dark:border-white/60"
+                  style={{
+                    background: 'linear-gradient(135deg, #0f172a 50%, #f8fafc 50%)',
+                  }}
                 />
-              </>
+              ) : (
+                <span
+                  className="w-4.5 h-4.5 rounded-full border border-slate-300 dark:border-white/30"
+                  style={{ backgroundColor: drawingToolState.color }}
+                />
+              )
             }
           />
-        </div>
 
-        {/* Highlight Palette */}
-        <div className="relative inline-block" data-highlight-menu>
+          {/* Per-Category Stroke Size Control with Inline < / > Arrows on the Button */}
+          <div
+            className="relative inline-flex items-center rounded border border-slate-200 dark:border-vscode-borderLight bg-white dark:bg-vscode-input overflow-hidden"
+            data-drawing-size-menu
+          >
+            <button
+              type="button"
+              disabled={activeDrawingSize <= 1}
+              onClick={() =>
+                setDrawingToolState((prev) => updateToolStrokeSize(prev, activeDrawingSize - 1))
+              }
+              className="w-5 h-7 flex items-center justify-center text-slate-500 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover disabled:opacity-35 cursor-pointer transition border-r border-slate-200/80 dark:border-vscode-borderLight"
+              title="Riduci spessore di 1 px"
+            >
+              <ChevronLeft className="w-3 h-3" />
+            </button>
+            <button
+              ref={drawingSizeBtnRef}
+              type="button"
+              onClick={() => {
+                const nextOpen = !drawingSizeMenuOpen;
+                setDrawingBgMenuOpen(false);
+                if (nextOpen) {
+                  setDrawingSizeInput(String(activeDrawingSize));
+                  setDrawingSizeMenuPos(
+                    computeFloatingMenuPos(drawingSizeBtnRef.current, 224, 152, false),
+                  );
+                }
+                setDrawingSizeMenuOpen(nextOpen);
+              }}
+              className="h-7 px-1.5 flex items-center gap-1 hover:bg-slate-50 dark:hover:bg-vscode-hover text-[11px] font-mono font-medium text-slate-700 dark:text-vscode-textBright transition cursor-pointer"
+              title={`Spessore (${sizeCategoryLabel[activeSizeCategory]}) — clicca per aprire il menu`}
+            >
+              <span className="flex items-center justify-center w-3.5 h-3.5 shrink-0">
+                <span
+                  className="w-3.5 rounded-full bg-slate-600 dark:bg-vscode-text"
+                  style={{
+                    height: `${Math.max(1.5, Math.min(8, Math.round(activeDrawingSize / 2.2)))}px`,
+                  }}
+                />
+              </span>
+              <span className="tabular-nums">{activeDrawingSize}px</span>
+            </button>
+            <button
+              type="button"
+              disabled={activeDrawingSize >= 22}
+              onClick={() =>
+                setDrawingToolState((prev) => updateToolStrokeSize(prev, activeDrawingSize + 1))
+              }
+              className="w-5 h-7 flex items-center justify-center text-slate-500 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover disabled:opacity-35 cursor-pointer transition border-l border-slate-200/80 dark:border-vscode-borderLight"
+              title="Aumenta spessore di 1 px"
+            >
+              <ChevronRight className="w-3 h-3" />
+            </button>
+          </div>
+
+          {/* Shape Fill & Dashed Toggles */}
+          <button
+            type="button"
+            onClick={() =>
+              setDrawingToolState((prev) => ({ ...prev, filled: !prev.filled }))
+            }
+            className={`w-7 h-7 flex items-center justify-center rounded border transition cursor-pointer ${
+              drawingToolState.filled
+                ? 'accent-toolbar-active'
+                : 'border-transparent text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight'
+            }`}
+            title="Riempimento forme (Rettangolo, Cerchio, Triangolo)"
+          >
+            <PaintBucket className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              setDrawingToolState((prev) => ({ ...prev, dashed: !prev.dashed }))
+            }
+            className={`h-7 px-1.5 flex items-center justify-center rounded border text-[10px] font-mono font-bold transition cursor-pointer ${
+              drawingToolState.dashed
+                ? 'accent-toolbar-active'
+                : 'border-transparent text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight'
+            }`}
+            title="Linea tratteggiata per forme, linee e frecce"
+          >
+            - -
+          </button>
+
+          <div className="w-px h-4 bg-slate-300 dark:bg-vscode-borderLight mx-0.5" />
+
+          {/* Apple Pencil Pressure Sensitivity Toggle */}
+          <button
+            type="button"
+            onClick={() =>
+              setDrawingToolState((prev) => ({
+                ...prev,
+                pressureEnabled: !prev.pressureEnabled,
+              }))
+            }
+            className={`h-7 px-2 flex items-center gap-1 rounded border text-xs font-medium transition cursor-pointer whitespace-nowrap ${
+              drawingToolState.pressureEnabled
+                ? 'accent-toolbar-active'
+                : 'border-transparent text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight'
+            }`}
+            title="Attiva o disattiva la sensibilità alla pressione di Apple Pencil"
+          >
+            <Gauge className="w-3.5 h-3.5" />
+            <span className="hidden md:inline">Pressione</span>
+          </button>
+
+          {/* Stylus-Only / Palm Rejection Toggle */}
+          <button
+            type="button"
+            onClick={() =>
+              setDrawingToolState((prev) => ({
+                ...prev,
+                stylusOnly: !prev.stylusOnly,
+              }))
+            }
+            className={`h-7 px-2 flex items-center gap-1 rounded border text-xs font-medium transition cursor-pointer whitespace-nowrap ${
+              drawingToolState.stylusOnly
+                ? 'accent-toolbar-active'
+                : 'border-transparent text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight'
+            }`}
+            title="Solo Apple Pencil / Stilo (ignora il tocco del dito per evitare segni accidentali)"
+          >
+            <Hand className="w-3.5 h-3.5" />
+            <span className="hidden lg:inline">Solo Pencil</span>
+          </button>
+
+          {/* Interactive Straightedge Ruler Toggle */}
+          <button
+            type="button"
+            onClick={() =>
+              setDrawingToolState((prev) => ({
+                ...prev,
+                rulerVisible: !prev.rulerVisible,
+              }))
+            }
+            className={`h-7 px-2 flex items-center gap-1 rounded border text-xs font-medium transition cursor-pointer whitespace-nowrap ${
+              drawingToolState.rulerVisible
+                ? 'accent-toolbar-active'
+                : 'border-transparent text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight'
+            }`}
+            title="Mostra o nascondi il righello interattivo ruotabile"
+          >
+            <Ruler className="w-3.5 h-3.5" />
+            <span className="hidden md:inline">Righello</span>
+          </button>
+
+          {/* Paper Background Selector */}
+          <div className="relative inline-block" data-drawing-bg-menu>
+            <button
+              ref={drawingBgBtnRef}
+              type="button"
+              onClick={() => {
+                const nextOpen = !drawingBgMenuOpen;
+                setDrawingSizeMenuOpen(false);
+                if (nextOpen) {
+                  setDrawingBgMenuPos(
+                    computeFloatingMenuPos(drawingBgBtnRef.current, 152, 160, true),
+                  );
+                }
+                setDrawingBgMenuOpen(nextOpen);
+              }}
+              className={`w-7 h-7 flex items-center justify-center rounded border transition cursor-pointer ${
+                drawingToolState.bg !== 'blank'
+                  ? 'accent-toolbar-active'
+                  : 'border-transparent text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight'
+              }`}
+              title="Sfondo foglio (Bianco, Quadretti, Righe, Puntini)"
+            >
+              <Grid3X3 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Undo / Redo / Clear */}
+          <div className="flex items-center gap-0.5 ml-auto">
+            <button
+              type="button"
+              disabled={!drawingHistoryInfo.canUndo}
+              onClick={() => pageDrawingRef.current?.undo()}
+              className={`w-7 h-7 flex items-center justify-center rounded transition ${
+                drawingHistoryInfo.canUndo
+                  ? 'text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight cursor-pointer'
+                  : 'opacity-35 cursor-not-allowed text-slate-400'
+              }`}
+              title="Annulla ultimo tratto (Ctrl+Z)"
+            >
+              <Undo2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              disabled={!drawingHistoryInfo.canRedo}
+              onClick={() => pageDrawingRef.current?.redo()}
+              className={`w-7 h-7 flex items-center justify-center rounded transition ${
+                drawingHistoryInfo.canRedo
+                  ? 'text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight cursor-pointer'
+                  : 'opacity-35 cursor-not-allowed text-slate-400'
+              }`}
+              title="Ripristina tratto (Ctrl+Shift+Z)"
+            >
+              <Redo2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              disabled={drawingHistoryInfo.itemCount === 0}
+              onClick={() => pageDrawingRef.current?.clear()}
+              className={`w-7 h-7 flex items-center justify-center rounded transition ${
+                drawingHistoryInfo.itemCount > 0
+                  ? 'text-slate-600 dark:text-vscode-text hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 cursor-pointer'
+                  : 'opacity-35 cursor-not-allowed text-slate-400'
+              }`}
+              title="Pulisci tutti i disegni sulla pagina (annullabile con Ctrl+Z)"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      ) : (
+        /* Formatting Toolbar */
+        <div className="bg-slate-100 dark:bg-vscode-sidebar border-b border-slate-200 dark:border-vscode-border p-1.5 flex gap-1 items-center flex-none flex-wrap">
           <button
             type="button"
             disabled={toolbarDisabled}
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              if (toolbarDisabled) return;
-              saveSelection();
-              setHighlightMenuOpen((prev) => !prev);
-              setExportMenuOpen(false);
-            }}
-            className={toolbarBtnClass(false)}
+            onClick={() => formatDoc('bold')}
+            className={toolbarBtnClass(activeFormats.bold)}
             title={
               toolbarDisabled
-                ? 'Evidenziazione disabilitata nei blocchi codice'
-                : 'Evidenzia Testo'
+                ? 'Formattazione disabilitata nei blocchi codice'
+                : 'Grassetto'
             }
           >
-            <Highlighter className="w-3.5 h-3.5" />
+            <Bold className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            disabled={toolbarDisabled}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => formatDoc('italic')}
+            className={toolbarBtnClass(activeFormats.italic)}
+            title={
+              toolbarDisabled
+                ? 'Formattazione disabilitata nei blocchi codice'
+                : 'Corsivo'
+            }
+          >
+            <Italic className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            disabled={toolbarDisabled}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => formatDoc('underline')}
+            className={toolbarBtnClass(activeFormats.underline)}
+            title={
+              toolbarDisabled
+                ? 'Formattazione disabilitata nei blocchi codice'
+                : 'Sottolineato'
+            }
+          >
+            <Underline className="w-3.5 h-3.5" />
           </button>
 
-          {highlightMenuOpen && !toolbarDisabled && (
-            <div className="absolute left-0 mt-1 p-2 bg-white dark:bg-vscode-sidebar border border-slate-200 dark:border-vscode-borderLight rounded-lg shadow-xl z-50 flex gap-1.5 items-center">
-              {HIGHLIGHT_SWATCHES.map((sw) => (
-                <button
-                  key={sw.color}
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => applyHighlight(sw.color)}
-                  style={{ backgroundColor: sw.color }}
-                  className={`w-5 h-5 rounded-full border ${sw.border} hover:scale-110 transition shadow-xs cursor-pointer`}
-                  title={sw.label}
-                />
-              ))}
-              <div className="w-px h-4 bg-slate-200 dark:bg-vscode-borderLight mx-0.5" />
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => applyHighlight('transparent')}
-                className="w-5 h-5 rounded-full border border-slate-300 dark:border-vscode-borderLight flex items-center justify-center text-slate-400 hover:text-red-500 hover:scale-110 transition cursor-pointer"
-                title="Rimuovi Evidenziatore"
-              >
-                <Ban className="w-3 h-3" />
-              </button>
-            </div>
-          )}
-        </div>
+          <div className="w-px h-4 bg-slate-300 dark:bg-vscode-borderLight mx-0.5" />
 
-        <div className="w-px h-4 bg-slate-300 dark:bg-vscode-borderLight mx-0.5" />
+          {/* Text Color Preset Menu (no color wheel) */}
+          <div
+            className={toolbarDisabled ? 'pointer-events-none opacity-40' : ''}
+            onMouseDown={saveSelection}
+          >
+            <PresetColorPicker
+              value={selectedTextColor}
+              presets={PRESET_TEXT_COLORS}
+              onSelect={(c) => applyColor(c)}
+              onReset={() => resetTextColor()}
+              resetLabel="Ripristina colore"
+              title={
+                toolbarDisabled
+                  ? 'Colore testo disabilitato nei blocchi codice'
+                  : 'Colore Testo'
+              }
+              triggerClassName="w-7 h-7 flex flex-col items-center justify-center text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight rounded transition cursor-pointer"
+              trigger={
+                <>
+                  <TypeIcon className="w-3.5 h-3.5" />
+                  <span
+                    className="w-3.5 h-0.5 rounded-full mt-0.5 border border-black/15 dark:border-white/25"
+                    style={{ backgroundColor: selectedTextColor }}
+                  />
+                </>
+              }
+            />
+          </div>
 
-        <button
-          type="button"
-          disabled={toolbarDisabled}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => formatDoc('insertUnorderedList')}
-          className={toolbarBtnClass(activeFormats.unorderedList)}
-          title="Elenco Puntato"
-        >
-          <List className="w-3.5 h-3.5" />
-        </button>
-        <button
-          type="button"
-          disabled={toolbarDisabled}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => formatDoc('insertOrderedList')}
-          className={toolbarBtnClass(activeFormats.orderedList)}
-          title="Elenco Numerato"
-        >
-          <ListOrdered className="w-3.5 h-3.5" />
-        </button>
-
-        <div className="w-px h-4 bg-slate-300 dark:bg-vscode-borderLight mx-0.5" />
-
-        {(['H1', 'H2', 'H3'] as const).map((h) => {
-          const isHeadingActive = !toolbarDisabled && activeFormats.blockTag === h;
-          return (
+          {/* Highlight Palette */}
+          <div className="relative inline-block" data-highlight-menu>
             <button
-              key={h}
               type="button"
               disabled={toolbarDisabled}
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => toggleHeading(h)}
-              className={`h-7 px-1.5 flex items-center justify-center font-bold text-xs rounded transition ${
-                toolbarDisabled
-                  ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-vscode-textMuted'
-                  : isHeadingActive
-                    ? 'accent-toolbar-active cursor-pointer'
-                    : 'text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight cursor-pointer'
-              }`}
+              onClick={() => {
+                if (toolbarDisabled) return;
+                saveSelection();
+                setHighlightMenuOpen((prev) => !prev);
+                setExportMenuOpen(false);
+              }}
+              className={toolbarBtnClass(false)}
               title={
                 toolbarDisabled
-                  ? 'Titoli disabilitati nei blocchi codice'
-                  : isHeadingActive
-                    ? `Rimuovi Titolo ${h.slice(1)} (torna a paragrafo normale)`
-                    : `Titolo ${h.slice(1)}`
+                  ? 'Evidenziazione disabilitata nei blocchi codice'
+                  : 'Evidenzia Testo'
               }
             >
-              {h}
+              <Highlighter className="w-3.5 h-3.5" />
             </button>
-          );
-        })}
 
-        <div className="w-px h-4 bg-slate-300 dark:bg-vscode-borderLight mx-0.5" />
+            {highlightMenuOpen && !toolbarDisabled && (
+              <div className="absolute left-0 mt-1 p-2 bg-white dark:bg-vscode-sidebar border border-slate-200 dark:border-vscode-borderLight rounded-lg shadow-xl z-50 flex gap-1.5 items-center">
+                {HIGHLIGHT_SWATCHES.map((sw) => (
+                  <button
+                    key={sw.color}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => applyHighlight(sw.color)}
+                    style={{ backgroundColor: sw.color }}
+                    className={`w-5 h-5 rounded-full border ${sw.border} hover:scale-110 transition shadow-xs cursor-pointer`}
+                    title={sw.label}
+                  />
+                ))}
+                <div className="w-px h-4 bg-slate-200 dark:bg-vscode-borderLight mx-0.5" />
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => applyHighlight('transparent')}
+                  className="w-5 h-5 rounded-full border border-slate-300 dark:border-vscode-borderLight flex items-center justify-center text-slate-400 hover:text-red-500 hover:scale-110 transition cursor-pointer"
+                  title="Rimuovi Evidenziatore"
+                >
+                  <Ban className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+          </div>
 
-        {/* Enabled Code Block Tool */}
-        <button
-          type="button"
-          disabled={toolbarDisabled}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={insertCodeBlock}
-          className={`h-7 px-2 flex items-center justify-center gap-1 text-xs rounded transition whitespace-nowrap ${
-            toolbarDisabled
-              ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-vscode-textMuted'
-              : 'text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight cursor-pointer'
-          }`}
-          title="Inserisci Blocco Codice"
-        >
-          <Code className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Code</span>
-        </button>
+          <div className="w-px h-4 bg-slate-300 dark:bg-vscode-borderLight mx-0.5" />
 
-        <button
-          type="button"
-          disabled={toolbarDisabled}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={insertCallout}
-          className={`h-7 px-2 flex items-center justify-center gap-1 text-xs rounded transition whitespace-nowrap ${
-            toolbarDisabled
-              ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-vscode-textMuted'
-              : 'text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight cursor-pointer'
-          }`}
-          title="Inserisci Nota In Evidenza"
-        >
-          <Quote className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Nota</span>
-        </button>
-
-        <button
-          type="button"
-          disabled={toolbarDisabled}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={insertTable}
-          className={`h-7 px-2 flex items-center justify-center gap-1 text-xs rounded transition whitespace-nowrap ${
-            toolbarDisabled
-              ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-vscode-textMuted'
-              : activeFormats.inTable
-                ? 'accent-toolbar-active cursor-pointer'
-                : 'text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight cursor-pointer'
-          }`}
-          title="Inserisci Tabella"
-        >
-          <TableIcon className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Tabella</span>
-        </button>
-
-        {/* Export Active Note Dropdown */}
-        <div className="relative inline-block ml-auto" data-export-menu>
           <button
             type="button"
-            onClick={() => {
-              setExportMenuOpen((prev) => !prev);
-              setHighlightMenuOpen(false);
-            }}
-            className="h-7 px-2.5 flex items-center justify-center gap-1.5 text-xs font-medium text-slate-700 dark:text-vscode-text bg-white dark:bg-vscode-input hover:bg-slate-200 dark:hover:bg-vscode-borderLight border border-slate-200 dark:border-vscode-borderLight rounded transition shadow-xs whitespace-nowrap cursor-pointer"
-            title="Esporta nota corrente"
+            disabled={toolbarDisabled}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => formatDoc('insertUnorderedList')}
+            className={toolbarBtnClass(activeFormats.unorderedList)}
+            title="Elenco Puntato"
           >
-            <Download className="w-3.5 h-3.5 accent-icon" />
-            <span className="hidden sm:inline">Esporta</span>
-            <ChevronDown className="w-3 h-3 opacity-75" />
+            <List className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            disabled={toolbarDisabled}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => formatDoc('insertOrderedList')}
+            className={toolbarBtnClass(activeFormats.orderedList)}
+            title="Elenco Numerato"
+          >
+            <ListOrdered className="w-3.5 h-3.5" />
           </button>
 
-          {exportMenuOpen && (
-            <div className="absolute right-0 mt-1 w-52 bg-white dark:bg-vscode-sidebar border border-slate-200 dark:border-vscode-borderLight rounded-xl shadow-xl z-50 p-1">
-              <div className="px-2.5 py-1 text-[11px] font-semibold text-slate-400 dark:text-vscode-textMuted">
-                Esporta Nota Attiva
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setExportMenuOpen(false);
-                  if (!activeNote) {
-                    onToast('Nessuna nota attiva da esportare.', 'error');
-                    return;
-                  }
-                  exportActiveNoteToPDF(activeNote.title, subjectName, getCleanHtml());
-                }}
-                className="w-full text-left px-2.5 py-2 text-xs text-slate-700 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover rounded-lg transition flex items-center gap-2 cursor-pointer"
-              >
-                <FileText className="w-3.5 h-3.5 text-red-500" />
-                <span>Esporta PDF / Stampa</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setExportMenuOpen(false);
-                  if (!activeNote) {
-                    onToast('Nessuna nota attiva da esportare.', 'error');
-                    return;
-                  }
-                  exportActiveNoteToMarkdown(activeNote.title, subjectName, getCleanHtml());
-                  onToast('Nota esportata in Markdown (.md).', 'success');
-                }}
-                className="w-full text-left px-2.5 py-2 text-xs text-slate-700 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover rounded-lg transition flex items-center gap-2 cursor-pointer"
-              >
-                <FileCode2 className="w-3.5 h-3.5 text-blue-500" />
-                <span>Esporta Markdown (.md)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setExportMenuOpen(false);
-                  if (!activeNote) {
-                    onToast('Nessuna nota attiva da esportare.', 'error');
-                    return;
-                  }
-                  exportActiveNoteToHTML(activeNote.title, getCleanHtml());
-                  onToast('Nota esportata in HTML (.html).', 'success');
-                }}
-                className="w-full text-left px-2.5 py-2 text-xs text-slate-700 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover rounded-lg transition flex items-center gap-2 cursor-pointer"
-              >
-                <Code className="w-3.5 h-3.5 text-amber-500" />
-                <span>Esporta HTML (.html)</span>
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
+          <div className="w-px h-4 bg-slate-300 dark:bg-vscode-borderLight mx-0.5" />
 
-      {/* Contextual Table Sub-Toolbar (when caret is inside a table) */}
-      {activeNote && activeFormats.inTable && !activeFormats.inCodeBlock && (
+          {(['H1', 'H2', 'H3'] as const).map((h) => {
+            const isHeadingActive = !toolbarDisabled && activeFormats.blockTag === h;
+            return (
+              <button
+                key={h}
+                type="button"
+                disabled={toolbarDisabled}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => toggleHeading(h)}
+                className={`h-7 px-1.5 flex items-center justify-center font-bold text-xs rounded transition ${
+                  toolbarDisabled
+                    ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-vscode-textMuted'
+                    : isHeadingActive
+                      ? 'accent-toolbar-active cursor-pointer'
+                      : 'text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight cursor-pointer'
+                }`}
+                title={
+                  toolbarDisabled
+                    ? 'Titoli disabilitati nei blocchi codice'
+                    : isHeadingActive
+                      ? `Rimuovi Titolo ${h.slice(1)} (torna a paragrafo normale)`
+                      : `Titolo ${h.slice(1)}`
+                }
+              >
+                {h}
+              </button>
+            );
+          })}
+
+          <div className="w-px h-4 bg-slate-300 dark:bg-vscode-borderLight mx-0.5" />
+
+          {/* Enabled Code Block Tool */}
+          <button
+            type="button"
+            disabled={toolbarDisabled}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={insertCodeBlock}
+            className={`h-7 px-2 flex items-center justify-center gap-1 text-xs rounded transition whitespace-nowrap ${
+              toolbarDisabled
+                ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-vscode-textMuted'
+                : 'text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight cursor-pointer'
+            }`}
+            title="Inserisci Blocco Codice"
+          >
+            <Code className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Code</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={toolbarDisabled}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={insertCallout}
+            className={`h-7 px-2 flex items-center justify-center gap-1 text-xs rounded transition whitespace-nowrap ${
+              toolbarDisabled
+                ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-vscode-textMuted'
+                : 'text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight cursor-pointer'
+            }`}
+            title="Inserisci Nota In Evidenza"
+          >
+            <Quote className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Nota</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={toolbarDisabled}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={insertTable}
+            className={`h-7 px-2 flex items-center justify-center gap-1 text-xs rounded transition whitespace-nowrap ${
+              toolbarDisabled
+                ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-vscode-textMuted'
+                : activeFormats.inTable
+                  ? 'accent-toolbar-active cursor-pointer'
+                  : 'text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight cursor-pointer'
+            }`}
+            title="Inserisci Tabella"
+          >
+            <TableIcon className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Tabella</span>
+          </button>
+
+          {/* Pencil / Direct Full-Page Handwriting & Drawing Tool */}
+          <button
+            type="button"
+            disabled={!activeNote}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={handleOpenDrawingTool}
+            className={`h-7 px-2 flex items-center justify-center gap-1 text-xs rounded transition whitespace-nowrap ${
+              !activeNote
+                ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-vscode-textMuted'
+                : 'text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight cursor-pointer'
+            }`}
+            title="Disegna o scrivi a mano direttamente sulla pagina (Apple Pencil, touch o mouse)"
+          >
+            <PenTool className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Disegna</span>
+          </button>
+
+          {/* Export Active Note Dropdown */}
+          <div className="relative inline-block ml-auto" data-export-menu>
+            <button
+              type="button"
+              onClick={() => {
+                setExportMenuOpen((prev) => !prev);
+                setHighlightMenuOpen(false);
+              }}
+              className="h-7 px-2.5 flex items-center justify-center gap-1.5 text-xs font-medium text-slate-700 dark:text-vscode-text bg-white dark:bg-vscode-input hover:bg-slate-200 dark:hover:bg-vscode-borderLight border border-slate-200 dark:border-vscode-borderLight rounded transition shadow-xs whitespace-nowrap cursor-pointer"
+              title="Esporta nota corrente"
+            >
+              <Download className="w-3.5 h-3.5 accent-icon" />
+              <span className="hidden sm:inline">Esporta</span>
+              <ChevronDown className="w-3 h-3 opacity-75" />
+            </button>
+
+            {exportMenuOpen && (
+              <div className="absolute right-0 mt-1 w-52 bg-white dark:bg-vscode-sidebar border border-slate-200 dark:border-vscode-borderLight rounded-xl shadow-xl z-50 p-1">
+                <div className="px-2.5 py-1 text-[11px] font-semibold text-slate-400 dark:text-vscode-textMuted">
+                  Esporta Nota Attiva
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExportMenuOpen(false);
+                    if (!activeNote) {
+                      onToast('Nessuna nota attiva da esportare.', 'error');
+                      return;
+                    }
+                    exportActiveNoteToPDF(activeNote.title, subjectName, getCleanHtml());
+                  }}
+                  className="w-full text-left px-2.5 py-2 text-xs text-slate-700 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover rounded-lg transition flex items-center gap-2 cursor-pointer"
+                >
+                  <FileText className="w-3.5 h-3.5 text-red-500" />
+                  <span>Esporta PDF / Stampa</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExportMenuOpen(false);
+                    if (!activeNote) {
+                      onToast('Nessuna nota attiva da esportare.', 'error');
+                      return;
+                    }
+                    exportActiveNoteToMarkdown(activeNote.title, subjectName, getCleanHtml());
+                    onToast('Nota esportata in Markdown (.md).', 'success');
+                  }}
+                  className="w-full text-left px-2.5 py-2 text-xs text-slate-700 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover rounded-lg transition flex items-center gap-2 cursor-pointer"
+                >
+                  <FileCode2 className="w-3.5 h-3.5 text-blue-500" />
+                  <span>Esporta Markdown (.md)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExportMenuOpen(false);
+                    if (!activeNote) {
+                      onToast('Nessuna nota attiva da esportare.', 'error');
+                      return;
+                    }
+                    exportActiveNoteToHTML(activeNote.title, getCleanHtml());
+                    onToast('Nota esportata in HTML (.html).', 'success');
+                  }}
+                  className="w-full text-left px-2.5 py-2 text-xs text-slate-700 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover rounded-lg transition flex items-center gap-2 cursor-pointer"
+                >
+                  <Code className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Esporta HTML (.html)</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Contextual Table Sub-Toolbar (when caret is inside a table, hidden in draw mode) */}
+      {activeNote && activeFormats.inTable && !activeFormats.inCodeBlock && !drawingMode && (
         <div className="accent-soft-bg border-b border-slate-200 dark:border-vscode-border px-2.5 py-1 flex items-center gap-1.5 flex-wrap flex-none text-[11px]">
           <span className="font-mono text-[10px] font-semibold uppercase tracking-wider accent-text mr-1">
             Tabella
@@ -2175,82 +2988,133 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
         )}
 
         <div
-          id="notes-area"
-          ref={editorRef}
-          contentEditable={!!activeNote}
-          suppressContentEditableWarning
-          data-placeholder="Inizia a scrivere i tuoi appunti qui..."
-          onFocus={(e) => {
-            if ((e.target as HTMLElement).closest('.its-code-host')) {
-              handleFocusCodeBlock();
-              return;
+          ref={pageScrollRef}
+          style={{ scrollbarGutter: 'stable' }}
+          className="flex-1 w-full h-full overflow-y-auto relative"
+        >
+          <div
+            ref={pageWrapperRef}
+            style={
+              pageOverlayMinHeight > 0
+                ? { minHeight: `${pageOverlayMinHeight}px` }
+                : undefined
             }
-            try {
-              document.execCommand('defaultParagraphSeparator', false, 'p');
-            } catch {
-              // Ignore
-            }
-            syncSelectionState();
-          }}
-          onInput={() => {
-            syncCodeBlocksFromDom();
-            syncSelectionState();
-            notifyContentChanged();
-          }}
-          onPaste={handlePaste}
-          onKeyDown={(e) => {
-            if ((e.target as HTMLElement).closest('.its-code-host')) return;
-            const sel = window.getSelection();
-            const anchor = sel?.anchorNode;
-            const anchorEl =
-              anchor?.nodeType === Node.ELEMENT_NODE
-                ? (anchor as HTMLElement)
-                : anchor?.parentElement;
-
-            const currentCell = anchorEl?.closest('td, th') as HTMLTableCellElement | null;
-            if (currentCell && e.key === 'Tab') {
-              const table = currentCell.closest('table');
-              if (table) {
-                e.preventDefault();
-                const allCells = Array.from(table.querySelectorAll('th, td')) as HTMLTableCellElement[];
-                const idx = allCells.indexOf(currentCell);
-                const nextCell = e.shiftKey ? allCells[idx - 1] : allCells[idx + 1];
-                if (nextCell) {
-                  focusTableCell(nextCell);
+            className="relative min-h-full w-full"
+          >
+            <div
+              id="notes-area"
+              ref={editorRef}
+              contentEditable={!!activeNote && !drawingMode}
+              suppressContentEditableWarning
+              data-placeholder="Inizia a scrivere i tuoi appunti qui..."
+              onFocus={(e) => {
+                if (drawingMode) {
+                  e.currentTarget.blur();
+                  return;
                 }
-              }
-              return;
-            }
+                if ((e.target as HTMLElement).closest('.its-code-host')) {
+                  handleFocusCodeBlock();
+                  return;
+                }
+                try {
+                  document.execCommand('defaultParagraphSeparator', false, 'p');
+                } catch {
+                  // Ignore
+                }
+                syncSelectionState();
+              }}
+              onInput={() => {
+                if (drawingMode) return;
+                syncCodeBlocksFromDom();
+                syncSelectionState();
+                notifyContentChanged();
+              }}
+              onPaste={handlePaste}
+              onKeyDown={(e) => {
+                if (drawingMode) {
+                  e.preventDefault();
+                  return;
+                }
+                if ((e.target as HTMLElement).closest('.its-code-host')) return;
+                const sel = window.getSelection();
+                const anchor = sel?.anchorNode;
+                const anchorEl =
+                  anchor?.nodeType === Node.ELEMENT_NODE
+                    ? (anchor as HTMLElement)
+                    : anchor?.parentElement;
 
-            if (e.key === 'Enter' && !e.shiftKey) {
-              try {
-                document.execCommand('defaultParagraphSeparator', false, 'p');
-              } catch {
-                // Ignore
+                const currentCell = anchorEl?.closest('td, th') as HTMLTableCellElement | null;
+                if (currentCell && e.key === 'Tab') {
+                  const table = currentCell.closest('table');
+                  if (table) {
+                    e.preventDefault();
+                    const allCells = Array.from(table.querySelectorAll('th, td')) as HTMLTableCellElement[];
+                    const idx = allCells.indexOf(currentCell);
+                    const nextCell = e.shiftKey ? allCells[idx - 1] : allCells[idx + 1];
+                    if (nextCell) {
+                      focusTableCell(nextCell);
+                    }
+                  }
+                  return;
+                }
+
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  try {
+                    document.execCommand('defaultParagraphSeparator', false, 'p');
+                  } catch {
+                    // Ignore
+                  }
+                }
+              }}
+              onMouseDown={() => {
+                if (drawingMode) return;
+                pendingTypedColorRef.current = null;
+              }}
+              onMouseUp={handleTouchOrMouseSelection}
+              onKeyUp={(e) => {
+                if (drawingMode) return;
+                if (
+                  ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(
+                    e.key,
+                  )
+                ) {
+                  pendingTypedColorRef.current = null;
+                }
+                syncSelectionState();
+              }}
+              onContextMenu={handleContextMenu}
+              style={
+                {
+                  fontSize: `${editorFontSize}px`,
+                  lineHeight: editorLineHeight,
+                  '--editor-font-size': `${editorFontSize}px`,
+                } as React.CSSProperties
               }
-            }
-          }}
-          onMouseDown={() => {
-            pendingTypedColorRef.current = null;
-          }}
-          onMouseUp={handleTouchOrMouseSelection}
-          onKeyUp={(e) => {
-            if (
-              ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(
-                e.key,
-              )
-            ) {
-              pendingTypedColorRef.current = null;
-            }
-            syncSelectionState();
-          }}
-          onContextMenu={handleContextMenu}
-          style={{
-            fontSize: `${editorFontSize}px`,
-            lineHeight: editorLineHeight,
-          }}
-          className="flex-1 w-full h-full overflow-y-auto p-4 sm:p-6 focus:outline-none text-slate-800 dark:text-vscode-textBright"
-        />
+              className={`min-h-full w-full p-4 sm:p-6 focus:outline-none text-slate-800 dark:text-vscode-textBright relative z-10 ${
+                drawingMode ? 'select-none pointer-events-none its-drawing-active' : ''
+              }`}
+            />
+
+            {/* Full-Page Transparent Drawing Overlay (directly over entire page) */}
+            {activeNote && (
+              <PageDrawingOverlay
+                key={activeNote.id}
+                ref={pageDrawingRef}
+                data={pageDrawing}
+                drawingMode={drawingMode}
+                toolState={drawingToolState}
+                scrollContainerRef={pageScrollRef}
+                onEnsureVirtualHeight={(minVirtualH) => {
+                  setLiveDrawingVirtualHeight((prev) =>
+                    minVirtualH > prev + 32 ? minVirtualH : prev,
+                  );
+                }}
+                onChange={handlePageDrawingChange}
+                onHistoryStateChange={setDrawingHistoryInfo}
+              />
+            )}
+          </div>
+        </div>
 
         {/* Render interactive CodeBlockWidget inside each code block host via React Portal */}
         {codeBlocks.map((cb) =>
@@ -2511,14 +3375,25 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
                 setSelectionMenu((prev) => ({ ...prev, visible: false }));
                 insertTable();
               }}
-              className={`col-span-2 px-2 py-1.5 rounded-lg border text-left text-[11px] font-medium flex items-center gap-1.5 transition cursor-pointer ${
+              className={`px-2 py-1.5 rounded-lg border text-left text-[11px] font-medium flex items-center gap-1.5 transition cursor-pointer ${
                 activeFormats.inTable
                   ? 'accent-toolbar-active'
                   : 'border-transparent hover:bg-slate-100 dark:hover:bg-vscode-hover'
               }`}
             >
               <TableIcon className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-              <span>Inserisci Tabella</span>
+              <span className="truncate">Tabella</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectionMenu((prev) => ({ ...prev, visible: false }));
+                handleOpenDrawingTool();
+              }}
+              className="px-2 py-1.5 rounded-lg border border-transparent hover:bg-slate-100 dark:hover:bg-vscode-hover text-left text-[11px] font-medium flex items-center gap-1.5 transition cursor-pointer"
+            >
+              <PenTool className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Disegna</span>
             </button>
           </div>
 
@@ -2560,6 +3435,135 @@ export const RichTextEditorPanel: React.FC<RichTextEditorPanelProps> = ({
           </button>
         </div>
       )}
+
+      {/* Portaled Drawing Stroke Size Popover (never clipped by narrow columns) */}
+      {drawingMode &&
+        drawingSizeMenuOpen &&
+        drawingSizeMenuPos &&
+        createPortal(
+          <div
+            data-drawing-size-menu
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{ top: drawingSizeMenuPos.top, left: drawingSizeMenuPos.left }}
+            className="fixed w-56 p-2.5 bg-white dark:bg-vscode-sidebar border border-slate-200 dark:border-vscode-borderLight rounded-xl shadow-2xl z-[160] flex flex-col gap-2"
+          >
+            <div className="flex items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-vscode-text">
+              <span className="font-semibold truncate">
+                {sizeCategoryLabel[activeSizeCategory]}
+              </span>
+              <div className="flex items-center gap-1 shrink-0">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={drawingSizeInput}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/[^\d]/g, '').slice(0, 2);
+                    setDrawingSizeInput(val);
+                    const n = Number(val);
+                    if (val !== '' && Number.isFinite(n) && n >= 1 && n <= 22) {
+                      setDrawingToolState((prev) => updateToolStrokeSize(prev, n));
+                    }
+                  }}
+                  onBlur={commitDrawingSizeInput}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      commitDrawingSizeInput();
+                      (e.currentTarget as HTMLInputElement).blur();
+                    } else if (e.key === 'Escape') {
+                      setDrawingSizeInput(String(activeDrawingSize));
+                      setDrawingSizeMenuOpen(false);
+                    }
+                  }}
+                  aria-label="Spessore in pixel"
+                  className="w-11 h-6 px-1.5 text-center text-xs font-mono font-semibold rounded border border-slate-200 dark:border-vscode-borderLight bg-slate-50 dark:bg-vscode-input text-slate-800 dark:text-vscode-textBright focus:outline-none accent-focus tabular-nums"
+                />
+                <span className="text-[11px] font-mono text-slate-400 dark:text-vscode-textMuted">
+                  px
+                </span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={22}
+              value={activeDrawingSize}
+              onChange={(e) =>
+                setDrawingToolState((prev) =>
+                  updateToolStrokeSize(prev, Number(e.target.value)),
+                )
+              }
+              className="w-full accent-[var(--primary-600)] cursor-pointer"
+            />
+            <div className="flex items-center justify-between gap-1">
+              {[2, 4, 7, 11, 16].map((sz) => (
+                <button
+                  key={sz}
+                  type="button"
+                  onClick={() =>
+                    setDrawingToolState((prev) => updateToolStrokeSize(prev, sz))
+                  }
+                  className={`flex-1 h-7 rounded-lg border flex items-center justify-center transition cursor-pointer ${
+                    activeDrawingSize === sz
+                      ? 'accent-toolbar-active'
+                      : 'border-slate-200 dark:border-vscode-borderLight text-slate-700 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover'
+                  }`}
+                  title={`${sz}px`}
+                >
+                  <span
+                    className="rounded-full bg-current"
+                    style={{
+                      width: `${Math.max(3, Math.min(13, sz))}px`,
+                      height: `${Math.max(3, Math.min(13, sz))}px`,
+                    }}
+                  />
+                </button>
+              ))}
+            </div>
+          </div>,
+          document.body,
+        )}
+
+      {/* Portaled Paper Background Menu (never clipped outside narrow editor panel) */}
+      {drawingMode &&
+        drawingBgMenuOpen &&
+        drawingBgMenuPos &&
+        createPortal(
+          <div
+            data-drawing-bg-menu
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{ top: drawingBgMenuPos.top, left: drawingBgMenuPos.left }}
+            className="fixed w-38 p-1 bg-white dark:bg-vscode-sidebar border border-slate-200 dark:border-vscode-borderLight rounded-xl shadow-2xl z-[160] flex flex-col gap-0.5 text-xs"
+          >
+            {(
+              [
+                { id: 'blank', label: 'Bianco' },
+                { id: 'grid', label: 'Quadretti' },
+                { id: 'lined', label: 'Righe' },
+                { id: 'dots', label: 'Puntini' },
+              ] as { id: DrawingBackground; label: string }[]
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => {
+                  setDrawingToolState((prev) => ({ ...prev, bg: opt.id }));
+                  pageDrawingRef.current?.setBackground(opt.id);
+                  setDrawingBgMenuOpen(false);
+                }}
+                className={`w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between transition cursor-pointer ${
+                  drawingToolState.bg === opt.id
+                    ? 'accent-selected-row font-semibold'
+                    : 'text-slate-700 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover'
+                }`}
+              >
+                <span>{opt.label}</span>
+                {drawingToolState.bg === opt.id && <Check className="w-3 h-3" />}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 };

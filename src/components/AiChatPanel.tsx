@@ -101,11 +101,28 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
   const [attachingDrop, setAttachingDrop] = useState(false);
 
   const feedRef = useRef<HTMLDivElement>(null);
+  const quickActionsRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const historyPartsRef = useRef<
     { role: 'user' | 'model'; parts: Record<string, unknown>[] }[]
   >([]);
   const lastExternalIdRef = useRef<string | null>(null);
+
+  // Allow mouse wheel scrolling horizontally when hovering quick action chips
+  useEffect(() => {
+    const el = quickActionsRef.current;
+    if (!el) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth) return;
+      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (delta !== 0) {
+        e.preventDefault();
+        el.scrollLeft += delta;
+      }
+    };
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, []);
 
   const resetChat = useCallback(() => {
     historyPartsRef.current = [];
@@ -335,7 +352,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
     setInputText('');
     setAttachments([]);
     if (textareaRef.current) {
-      textareaRef.current.style.height = '40px';
+      textareaRef.current.style.height = '32px';
     }
     void sendMessage(trimmed, trimmed || 'Allegato inviato', currentAtts);
   };
@@ -537,7 +554,10 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
       )}
 
       {/* Quick Study Actions */}
-      <div className="p-2 border-b border-slate-200 dark:border-vscode-border bg-slate-100 dark:bg-vscode-tabInactive flex items-center gap-1.5 overflow-x-auto hide-scrollbar flex-none">
+      <div
+        ref={quickActionsRef}
+        className="p-2 border-b border-slate-200 dark:border-vscode-border bg-slate-100 dark:bg-vscode-tabInactive flex items-center gap-1.5 overflow-x-auto hide-scrollbar flex-none"
+      >
         <button
           type="button"
           disabled={isAiBlocked}
@@ -685,13 +705,13 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
       </div>
 
       {/* Input Area */}
-      <div className="p-2.5 sm:p-3 bg-white dark:bg-vscode-sidebar border-t border-slate-200 dark:border-vscode-border flex-none flex flex-col gap-2">
+      <div className="px-2 py-1.5 bg-white dark:bg-vscode-sidebar border-t border-slate-200 dark:border-vscode-border flex-none flex flex-col gap-1.5">
         {(attachments.length > 0 || attachingDrop) && (
-          <div className="flex flex-wrap gap-1.5 items-center">
+          <div className="flex flex-wrap gap-1 items-center">
             {attachments.map((att, idx) => (
               <div
                 key={`${att.name}_${idx}`}
-                className="flex items-center gap-1.5 px-2 py-1 bg-slate-100 dark:bg-vscode-input border border-slate-200 dark:border-vscode-borderLight rounded text-xs text-slate-700 dark:text-vscode-textBright shadow-xs"
+                className="flex items-center gap-1 px-1.5 py-0.5 bg-slate-100 dark:bg-vscode-input border border-slate-200 dark:border-vscode-borderLight rounded text-[11px] text-slate-700 dark:text-vscode-textBright shadow-xs"
               >
                 {att.isImage ? (
                   <ImageIcon className="w-3 h-3 accent-icon" />
@@ -706,12 +726,12 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
                   onClick={() => setAttachments((prev) => prev.filter((_, i) => i !== idx))}
                   className="text-slate-400 hover:text-red-500 ml-0.5 cursor-pointer"
                 >
-                  <X className="w-3 h-3" />
+                  <X className="w-2.5 h-2.5" />
                 </button>
               </div>
             ))}
             {attachingDrop && (
-              <span className="inline-flex items-center gap-1.5 text-[11px] accent-text px-2 py-1">
+              <span className="inline-flex items-center gap-1 text-[11px] accent-text px-1.5 py-0.5">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 <span>Lettura file...</span>
               </span>
@@ -719,12 +739,12 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="flex gap-2 min-w-0 items-end">
+        <form onSubmit={handleSubmit} className="flex gap-1.5 min-w-0 items-end">
           <label
-            className="cursor-pointer bg-slate-100 dark:bg-vscode-input hover:bg-slate-200 dark:hover:bg-vscode-hover border border-slate-300 dark:border-vscode-borderLight rounded-lg w-10 h-10 flex-none flex items-center justify-center transition text-slate-500 dark:text-vscode-textMuted shadow-xs"
+            className="cursor-pointer bg-slate-100 dark:bg-vscode-input hover:bg-slate-200 dark:hover:bg-vscode-hover border border-slate-300 dark:border-vscode-borderLight rounded-lg w-8 h-8 flex-none flex items-center justify-center transition text-slate-500 dark:text-vscode-textMuted shadow-xs"
             title="Allega file (PDF, DOCX, PPTX, Immagini, Codice, Testo)"
           >
-            <Paperclip className="w-4 h-4" />
+            <Paperclip className="w-3.5 h-3.5" />
             <input
               type="file"
               multiple
@@ -744,8 +764,8 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
             value={inputText}
             onChange={(e) => {
               setInputText(e.target.value);
-              e.target.style.height = '40px';
-              e.target.style.height = `${Math.min(e.target.scrollHeight, 128)}px`;
+              e.target.style.height = '32px';
+              e.target.style.height = `${Math.min(e.target.scrollHeight, 96)}px`;
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
@@ -755,8 +775,8 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
             }}
             onPaste={(e) => void handlePaste(e)}
             placeholder={isAiBlocked ? 'Richiedi approvazione AI per chattare...' : "Chiedi all'AI"}
-            style={{ minHeight: '40px' }}
-            className="flex-1 border border-slate-300 dark:border-vscode-borderLight bg-white dark:bg-vscode-input text-slate-800 dark:text-vscode-textBright rounded-lg px-3.5 py-2.5 text-sm focus:outline-none accent-focus-ring transition min-w-0 resize-none overflow-y-auto max-h-32 hide-scrollbar disabled:opacity-60"
+            style={{ minHeight: '32px' }}
+            className="flex-1 border border-slate-300 dark:border-vscode-borderLight bg-white dark:bg-vscode-input text-slate-800 dark:text-vscode-textBright rounded-lg px-2.5 py-1.5 text-xs leading-5 focus:outline-none accent-focus-ring transition min-w-0 resize-none overflow-y-auto max-h-24 hide-scrollbar disabled:opacity-60"
           />
 
           <button
@@ -764,10 +784,10 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({
             disabled={
               isAiBlocked || sending || attachingDrop || (!inputText.trim() && attachments.length === 0)
             }
-            className="accent-btn rounded-lg w-10 h-10 flex-none flex items-center justify-center transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            className="accent-btn rounded-lg w-8 h-8 flex-none flex items-center justify-center transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             title="Invia messaggio (Invio)"
           >
-            <Send className="w-4 h-4" />
+            <Send className="w-3.5 h-3.5" />
           </button>
         </form>
       </div>

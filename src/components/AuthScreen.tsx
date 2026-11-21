@@ -9,6 +9,7 @@ import {
   Sparkles,
   Sun,
 } from 'lucide-react';
+import { APP_VERSION } from '../constants/defaults';
 import type { ThemeMode } from '../types';
 
 interface AuthScreenProps {
@@ -40,7 +41,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               ITS Study Assistant
             </span>
             <span className="text-[10px] font-mono font-medium text-slate-400 dark:text-vscode-textMuted leading-none mt-0.5">
-              v1.0.0
+              {APP_VERSION}
             </span>
           </div>
         </div>

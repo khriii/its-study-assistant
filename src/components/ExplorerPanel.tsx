@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ChevronDown,
   ChevronRight,
@@ -33,6 +34,7 @@ interface ExplorerPanelProps extends PanelWindowActions {
   studyFiles: StudyFile[];
   activeNoteId: string | null;
   activeSlideFileId: string | null;
+  activeSelectionKind?: 'note' | 'file';
   collapsed?: boolean;
   onOpenNote: (noteId: string) => void;
   onOpenStudyFile: (file: StudyFile) => void;
@@ -65,6 +67,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
   studyFiles,
   activeNoteId,
   activeSlideFileId,
+  activeSelectionKind = 'note',
   onOpenNote,
   onOpenStudyFile,
   onCreateNote,
@@ -93,7 +96,14 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
   onSwitchToTabs,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchExpanded, setSearchExpanded] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [externalFileHover, setExternalFileHover] = useState(false);
+  const [folderPlusMenu, setFolderPlusMenu] = useState<{
+    folderId: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const [editingItem, setEditingItem] = useState<{
     type: 'note' | 'folder' | 'file';
     id: string;
@@ -112,7 +122,9 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
 
   const editInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const pendingUploadFolderIdRef = useRef<string | null>(null);
   const folderClickTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -123,12 +135,54 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
     };
   }, []);
 
+  // Only focus & select text ONCE when entering inline rename mode (NOT on every keystroke)
+  const editingKey = editingItem ? `${editingItem.type}:${editingItem.id}` : null;
   useEffect(() => {
-    if (editingItem && editInputRef.current) {
+    if (editingKey && editInputRef.current) {
       editInputRef.current.focus();
       editInputRef.current.select();
     }
-  }, [editingItem]);
+  }, [editingKey]);
+
+  // Collapse search bar when pressing/clicking outside
+  useEffect(() => {
+    if (!searchExpanded) return;
+    const handleOutside = (e: MouseEvent | TouchEvent) => {
+      if (
+        searchContainerRef.current &&
+        !searchContainerRef.current.contains(e.target as Node)
+      ) {
+        setSearchExpanded(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+    };
+  }, [searchExpanded]);
+
+  // Close folder '+' context menu on outside click or Escape
+  useEffect(() => {
+    if (!folderPlusMenu) return;
+    const handleOutside = (e: MouseEvent | TouchEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('[data-folder-plus-menu]')) return;
+      setFolderPlusMenu(null);
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFolderPlusMenu(null);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    window.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+      window.removeEventListener('keydown', handleEsc);
+    };
+  }, [folderPlusMenu]);
 
   const trimmedQuery = searchQuery.trim().toLowerCase();
   const filteredNotes = trimmedQuery
@@ -175,7 +229,15 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
     }
   };
 
-  const handleUploadTrigger = async (fileList: FileList | File[] | null, folderId: string | null = null) => {
+  const openFilePickerForFolder = (folderId: string | null = null) => {
+    pendingUploadFolderIdRef.current = folderId;
+    uploadInputRef.current?.click();
+  };
+
+  const handleUploadTrigger = async (
+    fileList: FileList | File[] | null,
+    folderId: string | null = null,
+  ) => {
     if (!fileList || fileList.length === 0 || uploading) return;
     setUploading(true);
     try {
@@ -186,14 +248,46 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
   };
 
   const isExternalFileDrag = (e: React.DragEvent): boolean => {
-    return (
-      !draggedItem &&
-      Array.from(e.dataTransfer.types || []).includes('Files')
-    );
+    if (draggedItem) return false;
+    const types = Array.from(e.dataTransfer?.types || []);
+    if (types.includes('text/panel-id') || types.includes('application/x-its-explorer-item')) {
+      return false;
+    }
+    if (types.includes('Files') || types.includes('application/x-moz-file')) {
+      return true;
+    }
+    const items = e.dataTransfer?.items;
+    if (items && items.length > 0) {
+      return Array.from(items).some((it) => it.kind === 'file');
+    }
+    return false;
+  };
+
+  const handleOpenFolderPlusMenu = (folderId: string, e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setFolderPlusMenu((prev) => {
+      if (prev?.folderId === folderId) return null;
+      const menuW = 168;
+      const menuH = 88;
+      const x = Math.max(8, Math.min(rect.left, window.innerWidth - menuW - 8));
+      const y =
+        rect.bottom + menuH + 8 > window.innerHeight
+          ? Math.max(8, rect.top - menuH - 4)
+          : rect.bottom + 4;
+      return { folderId, x, y };
+    });
+  };
+
+  const expandSearch = () => {
+    setSearchExpanded(true);
+    window.setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 15);
   };
 
   const renderNoteItem = (note: Note) => {
-    const isActive = note.id === activeNoteId;
+    const isActive = activeSelectionKind === 'note' && note.id === activeNoteId;
     const isEditing = editingItem?.type === 'note' && editingItem.id === note.id;
     const isDraggingThis = draggedItem?.kind === 'note' && draggedItem.id === note.id;
     const noteDrop =
@@ -325,7 +419,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
   };
 
   const renderStudyFileItem = (file: StudyFile) => {
-    const isActive = file.id === activeSlideFileId;
+    const isActive = activeSelectionKind === 'file' && file.id === activeSlideFileId;
     const isEditing = editingItem?.type === 'file' && editingItem.id === file.id;
     const isDraggingThis = draggedItem?.kind === 'file' && draggedItem.id === file.id;
 
@@ -443,9 +537,49 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
   const rootNotes = filteredNotes.filter((n) => !n.folderId);
   const rootFiles = filteredStudyFiles.filter((f) => !f.folderId);
 
+  const hiddenUploadInput = (
+    <input
+      ref={uploadInputRef}
+      type="file"
+      accept=".pdf,.docx,.pptx"
+      multiple
+      className="hidden"
+      onChange={(e) => {
+        const targetFolder = pendingUploadFolderIdRef.current;
+        pendingUploadFolderIdRef.current = null;
+        void handleUploadTrigger(e.target.files, targetFolder);
+        e.target.value = '';
+      }}
+    />
+  );
+
   if (collapsed && !isMobileDrawer && !hideWindowHeader && !isMaximized) {
     return (
-      <div className="flex flex-col items-center h-full bg-slate-50 dark:bg-vscode-sidebar overflow-hidden py-1.5 gap-1.5 select-none">
+      <div
+        onDragOver={(e) => {
+          if (!isExternalFileDrag(e)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'copy';
+          setExternalFileHover(true);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setExternalFileHover(false);
+          }
+        }}
+        onDrop={(e) => {
+          if (e.dataTransfer.files?.length > 0) {
+            e.preventDefault();
+            e.stopPropagation();
+            setExternalFileHover(false);
+            void handleUploadTrigger(e.dataTransfer.files, null);
+          }
+        }}
+        className={`flex flex-col items-center h-full bg-slate-50 dark:bg-vscode-sidebar overflow-hidden py-1.5 gap-1.5 select-none transition-colors ${
+          externalFileHover ? 'accent-soft-bg' : ''
+        }`}
+      >
         <button
           type="button"
           onClick={() => onToggleCollapseExplorer?.()}
@@ -462,6 +596,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
           type="button"
           onClick={() => {
             onToggleCollapseExplorer?.();
+            setSearchExpanded(true);
             window.setTimeout(() => searchInputRef.current?.focus(), 60);
           }}
           className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 dark:text-vscode-textMuted hover:bg-slate-200 dark:hover:bg-vscode-hover hover:text-slate-800 dark:hover:text-white transition cursor-pointer"
@@ -497,7 +632,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
         <button
           type="button"
           disabled={uploading}
-          onClick={() => uploadInputRef.current?.click()}
+          onClick={() => openFilePickerForFolder(null)}
           className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 dark:text-vscode-textMuted hover:bg-slate-200 dark:hover:bg-vscode-hover hover:text-slate-800 dark:hover:text-white transition cursor-pointer disabled:opacity-50"
           title="Carica PDF, DOCX o PPTX (max 5MB)"
         >
@@ -508,17 +643,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
           )}
         </button>
 
-        <input
-          ref={uploadInputRef}
-          type="file"
-          accept=".pdf,.docx,.pptx"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            void handleUploadTrigger(e.target.files, null);
-            e.target.value = '';
-          }}
-        />
+        {hiddenUploadInput}
 
         <div className="mt-auto pb-1 flex flex-col items-center gap-1">
           <span
@@ -543,7 +668,31 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
   }
 
   return (
-    <div className="flex flex-col h-full bg-slate-50 dark:bg-vscode-sidebar overflow-hidden">
+    <div
+      onDragOver={(e) => {
+        if (!isExternalFileDrag(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'copy';
+        setExternalFileHover(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          setExternalFileHover(false);
+          setDropIndicator(null);
+        }
+      }}
+      onDrop={(e) => {
+        if (isExternalFileDrag(e) && e.dataTransfer.files?.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          setExternalFileHover(false);
+          setDropIndicator(null);
+          void handleUploadTrigger(e.dataTransfer.files, null);
+        }
+      }}
+      className="relative flex flex-col h-full bg-slate-50 dark:bg-vscode-sidebar overflow-hidden"
+    >
       {/* Header */}
       {!hideWindowHeader && (
         <div
@@ -629,66 +778,122 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
         </div>
       )}
 
-      {/* Search & Creation Bar */}
-      <div className="p-2 border-b border-slate-200 dark:border-vscode-border flex items-center gap-1 flex-none">
-        <div className="relative flex-1 min-w-0">
-          <input
-            ref={searchInputRef}
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cerca appunti o file..."
-            className="w-full bg-white dark:bg-vscode-input text-xs text-slate-700 dark:text-vscode-textBright pl-7 pr-2 py-1.5 rounded-md border border-slate-200 dark:border-vscode-borderLight focus:outline-none accent-focus"
-          />
-          <Search className="w-3.5 h-3.5 absolute left-2 top-2 text-slate-400 dark:text-vscode-textMuted" />
-        </div>
-        <button
-          type="button"
-          onClick={() => void handleCreateNoteClick(null)}
-          className="w-7 h-8 flex items-center justify-center text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight rounded-md transition flex-none cursor-pointer"
-          title="Nuovo File (Alt+N)"
-        >
-          <FilePlus2 className="w-4 h-4" />
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleCreateFolderClick()}
-          className="w-7 h-8 flex items-center justify-center text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight rounded-md transition flex-none cursor-pointer"
-          title="Nuova Cartella"
-        >
-          <FolderPlus className="w-4 h-4" />
-        </button>
-        <button
-          type="button"
-          disabled={uploading}
-          onClick={() => uploadInputRef.current?.click()}
-          className="w-7 h-8 flex items-center justify-center text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight rounded-md transition flex-none cursor-pointer disabled:opacity-50"
-          title="Carica PDF, DOCX o PPTX (max 5MB)"
-        >
-          {uploading ? (
-            <Loader2 className="w-4 h-4 animate-spin accent-icon" />
-          ) : (
-            <Upload className="w-4 h-4" />
-          )}
-        </button>
-        <input
-          ref={uploadInputRef}
-          type="file"
-          accept=".pdf,.docx,.pptx"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            void handleUploadTrigger(e.target.files, null);
-            e.target.value = '';
-          }}
-        />
+      {/* Search (Far-Left Collapsible) & Creation Bar */}
+      <div
+        ref={searchContainerRef}
+        className="px-1.5 py-1 border-b border-slate-200 dark:border-vscode-border flex items-center justify-between gap-1 flex-none min-h-[34px]"
+      >
+        {searchExpanded ? (
+          <div className="relative flex-1 w-full min-w-0">
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setSearchExpanded(false);
+                }
+              }}
+              placeholder="Cerca appunti o file..."
+              className="w-full h-6 bg-white dark:bg-vscode-input text-xs text-slate-700 dark:text-vscode-textBright pl-6.5 pr-6 rounded-md border border-slate-200 dark:border-vscode-borderLight focus:outline-none accent-focus"
+            />
+            <Search className="w-3 h-3 absolute left-2 top-1.5 text-slate-400 dark:text-vscode-textMuted pointer-events-none" />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  searchInputRef.current?.focus();
+                }}
+                className="w-4 h-4 flex items-center justify-center absolute right-1 top-1 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded cursor-pointer"
+                title="Cancella ricerca"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={expandSearch}
+              className={`relative w-6 h-6 flex items-center justify-center rounded-md transition flex-none cursor-pointer ${
+                trimmedQuery
+                  ? 'accent-toolbar-active border'
+                  : 'text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight'
+              }`}
+              title={trimmedQuery ? `Ricerca attiva: "${searchQuery}"` : 'Cerca appunti o file'}
+              aria-label="Cerca appunti o file"
+            >
+              <Search className="w-3.5 h-3.5" />
+              {trimmedQuery && (
+                <span
+                  aria-hidden="true"
+                  className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full"
+                  style={{ backgroundColor: 'var(--primary-500)' }}
+                />
+              )}
+            </button>
+
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => void handleCreateNoteClick(null)}
+                className="w-6 h-6 flex items-center justify-center text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight rounded-md transition flex-none cursor-pointer"
+                title="Nuovo File (Alt+N)"
+              >
+                <FilePlus2 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCreateFolderClick()}
+                className="w-6 h-6 flex items-center justify-center text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight rounded-md transition flex-none cursor-pointer"
+                title="Nuova Cartella"
+              >
+                <FolderPlus className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                disabled={uploading}
+                onClick={() => openFilePickerForFolder(null)}
+                className="w-6 h-6 flex items-center justify-center text-slate-600 dark:text-vscode-text hover:bg-slate-200 dark:hover:bg-vscode-borderLight rounded-md transition flex-none cursor-pointer disabled:opacity-50"
+                title="Carica PDF, DOCX o PPTX (max 5MB)"
+              >
+                {uploading ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin accent-icon" />
+                ) : (
+                  <Upload className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
+          </>
+        )}
+        {hiddenUploadInput}
       </div>
+
+      {/* External File Drag Overlay */}
+      {externalFileHover && dropIndicator?.type !== 'folder' && (
+        <div
+          style={{ backgroundColor: 'rgba(var(--primary-rgb), 0.12)' }}
+          className="pointer-events-none absolute inset-x-1.5 bottom-1.5 top-10 z-30 rounded-lg border-2 border-dashed border-[var(--primary-500)] flex flex-col items-center justify-center p-3 text-center backdrop-blur-[1px]"
+        >
+          <div className="bg-white dark:bg-vscode-sidebar border border-[var(--primary-500)]/40 rounded-xl px-3 py-2 shadow-lg flex items-center gap-2 text-xs font-semibold accent-text">
+            <Upload className="w-4 h-4 shrink-0" />
+            <span>Rilascia PDF, DOCX o PPTX qui</span>
+          </div>
+        </div>
+      )}
 
       {/* Hierarchical Tree */}
       <ul
         onDragOver={(e) => {
           if (!draggedItem && !isExternalFileDrag(e)) return;
           e.preventDefault();
+          if (isExternalFileDrag(e)) {
+            e.dataTransfer.dropEffect = 'copy';
+          }
           setDropIndicator({ type: 'root' });
         }}
         onDragLeave={(e) => {
@@ -699,6 +904,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
         onDrop={(e) => {
           if (draggedItem) {
             e.preventDefault();
+            e.stopPropagation();
             if (draggedItem.kind === 'note') {
               onMoveNoteOrder(draggedItem.id, null);
             } else {
@@ -710,6 +916,8 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
           }
           if (e.dataTransfer.files?.length > 0) {
             e.preventDefault();
+            e.stopPropagation();
+            setExternalFileHover(false);
             setDropIndicator(null);
             void handleUploadTrigger(e.dataTransfer.files, null);
           }
@@ -765,6 +973,10 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
                   if (!draggedItem && !isExternalFileDrag(e)) return;
                   e.preventDefault();
                   e.stopPropagation();
+                  if (isExternalFileDrag(e)) {
+                    e.dataTransfer.dropEffect = 'copy';
+                    setExternalFileHover(true);
+                  }
                   setDropIndicator({ type: 'folder', id: folder.id });
                 }}
                 onDrop={(e) => {
@@ -783,6 +995,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
                   if (e.dataTransfer.files?.length > 0) {
                     e.preventDefault();
                     e.stopPropagation();
+                    setExternalFileHover(false);
                     setDropIndicator(null);
                     void handleUploadTrigger(e.dataTransfer.files, folder.id);
                   }
@@ -837,9 +1050,14 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
                   <div className="flex lg:hidden group-hover:flex items-center gap-0.5 flex-none ml-1">
                     <button
                       type="button"
-                      onClick={(e) => void handleCreateNoteClick(folder.id, e)}
-                      className="w-6 h-6 flex items-center justify-center text-slate-400 hover:text-emerald-500 rounded transition cursor-pointer"
-                      title="Nuova nota nella cartella"
+                      data-folder-plus-menu
+                      onClick={(e) => handleOpenFolderPlusMenu(folder.id, e)}
+                      className={`w-6 h-6 flex items-center justify-center rounded transition cursor-pointer ${
+                        folderPlusMenu?.folderId === folder.id
+                          ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40'
+                          : 'text-slate-400 hover:text-emerald-500'
+                      }`}
+                      title="Nuova nota o carica file nella cartella"
                     >
                       <Plus className="w-3 h-3" />
                     </button>
@@ -888,6 +1106,43 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
           </li>
         )}
       </ul>
+
+      {/* Folder '+' Action Context Menu */}
+      {folderPlusMenu &&
+        createPortal(
+          <div
+            data-folder-plus-menu
+            style={{ left: folderPlusMenu.x, top: folderPlusMenu.y }}
+            onClick={(e) => e.stopPropagation()}
+            className="fixed z-[120] w-44 p-1 bg-white dark:bg-vscode-sidebar border border-slate-200 dark:border-vscode-borderLight rounded-xl shadow-2xl flex flex-col gap-0.5 text-xs"
+          >
+            <button
+              type="button"
+              onClick={() => {
+                const targetId = folderPlusMenu.folderId;
+                setFolderPlusMenu(null);
+                void handleCreateNoteClick(targetId);
+              }}
+              className="w-full text-left px-2.5 py-1.5 rounded-lg text-slate-700 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover flex items-center gap-2 transition cursor-pointer"
+            >
+              <FilePlus2 className="w-3.5 h-3.5 accent-icon shrink-0" />
+              <span>Nuovo File</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const targetId = folderPlusMenu.folderId;
+                setFolderPlusMenu(null);
+                openFilePickerForFolder(targetId);
+              }}
+              className="w-full text-left px-2.5 py-1.5 rounded-lg text-slate-700 dark:text-vscode-text hover:bg-slate-100 dark:hover:bg-vscode-hover flex items-center gap-2 transition cursor-pointer"
+            >
+              <Upload className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+              <span>Carica File</span>
+            </button>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   GripVertical,
   Layers,
@@ -71,9 +71,14 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
   onClosePanel,
   onSwitchToTabs,
 }) => {
+  const [cardCount, setCardCount] = useState<number>(defaultFlashcardCount);
   const [generating, setGenerating] = useState(false);
   const [flippedIds, setFlippedIds] = useState<Record<string, boolean>>({});
   const isAiBlocked = Boolean(aiAccessStatus && !aiAccessStatus.authorized);
+
+  useEffect(() => {
+    setCardCount(defaultFlashcardCount);
+  }, [defaultFlashcardCount]);
 
   const handleGenerate = async () => {
     if (isAiBlocked) {
@@ -86,6 +91,8 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
       return;
     }
 
+    const clampedCount = Math.max(1, Math.min(10, Math.round(cardCount || defaultFlashcardCount || 6)));
+    setCardCount(clampedCount);
     setGenerating(true);
     try {
       const headers = await getFirebaseAuthHeaders({ 'Content-Type': 'application/json' });
@@ -96,7 +103,7 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
           model: geminiModel,
           noteText,
           subjectName,
-          count: defaultFlashcardCount,
+          count: clampedCount,
           difficulty: studyDifficulty,
           responseLanguage: aiResponseLanguage,
         }),
@@ -185,20 +192,36 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
         </div>
       )}
 
-      <div className="p-2 border-b border-slate-200 dark:border-vscode-border bg-slate-100 dark:bg-vscode-tabInactive flex items-center justify-between flex-none">
-        <span className="text-[11px] font-semibold text-slate-700 dark:text-vscode-textBright ml-1">
+      <div className="p-2 border-b border-slate-200 dark:border-vscode-border bg-slate-100 dark:bg-vscode-tabInactive flex items-center justify-between gap-1.5 flex-none">
+        <span className="text-[11px] font-semibold text-slate-700 dark:text-vscode-textBright ml-1 truncate">
           Ripasso Attivo
+          {cards.length > 0 && (
+            <span className="ml-1 text-[10px] font-mono tabular-nums text-slate-500 dark:text-vscode-textMuted">
+              · {cards.length}
+            </span>
+          )}
         </span>
-        <button
-          type="button"
-          disabled={generating || isAiBlocked}
-          onClick={() => void handleGenerate()}
-          className="px-2.5 py-1.5 bg-white dark:bg-vscode-input hover:bg-emerald-50 dark:hover:bg-vscode-hover text-slate-700 dark:text-vscode-text border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-          title="Genera Flashcards con AI"
-        >
-          <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-          <span>Genera</span>
-        </button>
+        <div className="flex items-center gap-1 flex-none">
+          <input
+            type="number"
+            min={1}
+            max={10}
+            value={cardCount}
+            onChange={(e) => setCardCount(Number(e.target.value))}
+            className="w-11 px-1.5 py-1 bg-white dark:bg-vscode-input text-slate-700 dark:text-vscode-textBright border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-mono tabular-nums text-center focus:outline-none accent-focus"
+            title="Numero di flashcard da generare (1-10)"
+          />
+          <button
+            type="button"
+            disabled={generating || isAiBlocked}
+            onClick={() => void handleGenerate()}
+            className="px-2.5 py-1.5 bg-white dark:bg-vscode-input hover:bg-emerald-50 dark:hover:bg-vscode-hover text-slate-700 dark:text-vscode-text border border-slate-200 dark:border-vscode-borderLight rounded-lg text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            title="Genera Flashcards con AI"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Genera</span>
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-3 bg-slate-200/50 dark:bg-[#141414]">
@@ -214,7 +237,9 @@ export const FlashcardsPanel: React.FC<FlashcardsPanelProps> = ({
         {generating ? (
           <div className="flex flex-col items-center justify-center py-10 text-xs text-slate-500 dark:text-vscode-textMuted gap-2">
             <Loader2 className="w-5 h-5 animate-spin text-emerald-500" />
-            <span>Generazione flashcard con AI...</span>
+            <span>
+              Generazione di {cardCount} {cardCount === 1 ? 'flashcard' : 'flashcard'} con AI...
+            </span>
           </div>
         ) : cards.length === 0 ? (
           <div className="text-center text-xs text-slate-500 dark:text-vscode-textMuted mt-6 px-4 leading-relaxed">

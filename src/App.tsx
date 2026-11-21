@@ -115,6 +115,7 @@ export default function App() {
   const [quizTriggerToken, setQuizTriggerToken] = useState(0);
   const [externalAiPrompt, setExternalAiPrompt] = useState<ExternalAiPrompt | null>(null);
   const [activeSlideFileId, setActiveSlideFileId] = useState<string | null>(null);
+  const [selectedExplorerKind, setSelectedExplorerKind] = useState<'note' | 'file'>('note');
 
   // Desktop multitasking, drag & maximize states
   const [maximizedPanelId, setMaximizedPanelId] = useState<WindowId | null>(null);
@@ -133,15 +134,20 @@ export default function App() {
   );
   const localPaneHeightsRef = useRef<Record<number, Record<string, number>>>({});
 
-  // Reset activeSlideFileId when subject changes or file is removed
+  // Reset activeSlideFileId & Explorer selection kind when subject changes or file is removed
   useEffect(() => {
     if (
       activeSlideFileId &&
       !store.subjectStudyFiles.some((f) => f.id === activeSlideFileId)
     ) {
       setActiveSlideFileId(null);
+      setSelectedExplorerKind('note');
     }
   }, [activeSlideFileId, store.subjectStudyFiles]);
+
+  useEffect(() => {
+    setSelectedExplorerKind('note');
+  }, [store.currentSubject?.id]);
 
   // Clear maximize if that window gets hidden
   useEffect(() => {
@@ -163,7 +169,26 @@ export default function App() {
   }, [store.panelColumns]);
 
   useEffect(() => {
+    document.body.classList.toggle('its-dragging-panel', draggedPanelId !== null);
     return () => {
+      document.body.classList.remove('its-dragging-panel');
+    };
+  }, [draggedPanelId]);
+
+  useEffect(() => {
+    const preventWindowFileNav = (e: DragEvent) => {
+      const types = Array.from(e.dataTransfer?.types || []);
+      if (types.includes('Files')) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('dragover', preventWindowFileNav);
+    window.addEventListener('drop', preventWindowFileNav);
+    return () => {
+      window.removeEventListener('dragover', preventWindowFileNav);
+      window.removeEventListener('drop', preventWindowFileNav);
+      document.body.classList.remove('its-resizing');
+      document.body.classList.remove('its-dragging-panel');
       if (hoverTabTimerRef.current) {
         window.clearTimeout(hoverTabTimerRef.current.timer);
       }
@@ -504,6 +529,7 @@ export default function App() {
         }
       } else if (e.altKey && e.key.toLowerCase() === 'n') {
         e.preventDefault();
+        setSelectedExplorerKind('note');
         void store.createNote(null);
         ensurePanelVisible('left-panel');
       } else if (e.key === 'Escape') {
@@ -520,8 +546,8 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [store, ensurePanelVisible]);
 
-  // Viewport-clamped horizontal column resizer (prevents pushing other windows off screen)
-  const startResizing = (e: React.MouseEvent, leftPos: number, rightPos: number) => {
+  // Viewport-clamped horizontal column resizer (prevents pushing other windows off screen & avoids iframe event theft)
+  const startResizing = (e: React.PointerEvent, leftPos: number, rightPos: number) => {
     e.preventDefault();
     const startX = e.clientX;
     const isLeftFlexible = leftPos === flexibleColPos;
@@ -529,7 +555,17 @@ export default function App() {
     const targetCol = visibleColumns[targetPos];
     if (!targetCol || targetPos === flexibleColPos) return;
 
-    const containerW = workspaceRowRef.current?.clientWidth || window.innerWidth;
+    const rowEl = workspaceRowRef.current;
+    const containerW = rowEl?.clientWidth || window.innerWidth;
+    const sectionEls = rowEl
+      ? (Array.from(rowEl.children).filter((el) => el.tagName === 'SECTION') as HTMLElement[])
+      : [];
+    const targetRectW = sectionEls[targetPos]?.getBoundingClientRect().width;
+    const initialWidth =
+      typeof targetRectW === 'number' && targetRectW > 0
+        ? Math.round(targetRectW)
+        : getColumnWidthPx(targetCol);
+
     const totalResizersW = Math.max(0, visibleColumns.length - 1) * 4;
     let reservedForOtherCols = totalResizersW;
     visibleColumns.forEach((c, idx) => {
@@ -541,19 +577,24 @@ export default function App() {
       } else if (idx === flexibleColPos) {
         reservedForOtherCols += 220;
       } else {
-        reservedForOtherCols += getColumnWidthPx(c);
+        const renderedW = sectionEls[idx]?.getBoundingClientRect().width;
+        reservedForOtherCols +=
+          typeof renderedW === 'number' && renderedW > 0 ? renderedW : getColumnWidthPx(c);
       }
     });
 
-    const maxAllowed = Math.max(200, Math.min(760, containerW - reservedForOtherCols));
-    const initialWidth = getColumnWidthPx(targetCol);
+    const computedRoom = containerW - reservedForOtherCols;
+    const maxAllowed = Math.max(
+      180,
+      Math.min(800, computedRoom >= 180 ? computedRoom : Math.max(initialWidth, 260)),
+    );
     const isMultiPanelContainer = targetCol.panels.length >= 2;
     const singlePanelId = targetCol.panels[0];
 
-    const onMouseMove = (moveEvt: MouseEvent) => {
+    const onPointerMove = (moveEvt: PointerEvent) => {
       const dx = moveEvt.clientX - startX;
       const rawNext = isLeftFlexible ? initialWidth - dx : initialWidth + dx;
-      const clamped = Math.max(200, Math.min(maxAllowed, Math.round(rawNext)));
+      const clamped = Math.max(180, Math.min(maxAllowed, Math.round(rawNext)));
 
       if (isMultiPanelContainer) {
         const nextMap = { ...localColumnWidthsRef.current, [targetCol.colIndex]: clamped };
@@ -566,10 +607,13 @@ export default function App() {
       }
     };
 
-    const onMouseUp = () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', cleanup);
+      window.removeEventListener('pointercancel', cleanup);
+      window.removeEventListener('blur', cleanup);
       document.body.style.cursor = '';
+      document.body.classList.remove('its-resizing');
 
       if (isMultiPanelContainer) {
         const finalWidth = localColumnWidthsRef.current[targetCol.colIndex];
@@ -585,13 +629,16 @@ export default function App() {
     };
 
     document.body.style.cursor = 'col-resize';
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    document.body.classList.add('its-resizing');
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', cleanup);
+    window.addEventListener('pointercancel', cleanup);
+    window.addEventListener('blur', cleanup);
   };
 
   // Vertical pane resizer inside a vertically split container
   const startVerticalResizing = (
-    e: React.MouseEvent,
+    e: React.PointerEvent,
     col: VisibleColumn,
     topPaneIdx: number,
   ) => {
@@ -624,7 +671,7 @@ export default function App() {
       baseWeights[pId] = el ? Math.max(minPaneH, el.getBoundingClientRect().height) : 200;
     });
 
-    const onMouseMove = (moveEvt: MouseEvent) => {
+    const onPointerMove = (moveEvt: PointerEvent) => {
       const dy = moveEvt.clientY - startY;
       const nextTop = Math.max(minPaneH, Math.min(combinedH - minPaneH, initialTopH + dy));
       const nextBottom = Math.max(minPaneH, combinedH - nextTop);
@@ -642,10 +689,13 @@ export default function App() {
       setLocalPaneHeights(updatedMap);
     };
 
-    const onMouseUp = () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', cleanup);
+      window.removeEventListener('pointercancel', cleanup);
+      window.removeEventListener('blur', cleanup);
       document.body.style.cursor = '';
+      document.body.classList.remove('its-resizing');
 
       const finalHeights = localPaneHeightsRef.current[col.colIndex];
       if (finalHeights) {
@@ -657,8 +707,11 @@ export default function App() {
     };
 
     document.body.style.cursor = 'row-resize';
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    document.body.classList.add('its-resizing');
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', cleanup);
+    window.addEventListener('pointercancel', cleanup);
+    window.addEventListener('blur', cleanup);
   };
 
   // JSON Backup File Handler
@@ -726,6 +779,7 @@ export default function App() {
             studyFiles={store.subjectStudyFiles}
             activeNoteId={store.effectiveActiveNoteId}
             activeSlideFileId={activeSlideFileId}
+            activeSelectionKind={selectedExplorerKind}
             collapsed={
               mobileDrawer || options.forceExpandedExplorer || options.isMaximized
                 ? false
@@ -734,13 +788,18 @@ export default function App() {
             onToggleCollapseExplorer={handleToggleCollapseExplorer}
             onOpenNote={(noteId) => {
               store.openNote(noteId);
-              if (!isDesktop) setMobilePanel('left-panel');
+              setSelectedExplorerKind('note');
+              ensurePanelVisible('left-panel');
             }}
             onOpenStudyFile={(file) => {
               setActiveSlideFileId(file.id);
+              setSelectedExplorerKind('file');
               ensurePanelVisible('pdf-viewer-panel');
             }}
-            onCreateNote={(folderId) => store.createNote(folderId ?? null)}
+            onCreateNote={(folderId) => {
+              setSelectedExplorerKind('note');
+              return store.createNote(folderId ?? null);
+            }}
             onCreateFolder={() => store.createFolder()}
             onToggleFolder={(folderId) => void store.toggleFolderOpen(folderId)}
             onRenameNote={(noteId, title) => void store.renameNote(noteId, title)}
@@ -797,7 +856,10 @@ export default function App() {
           <SlideViewerPanel
             studyFiles={store.subjectStudyFiles}
             selectedExplorerFileId={activeSlideFileId}
-            onSelectExplorerFile={setActiveSlideFileId}
+            onSelectExplorerFile={(fileId) => {
+              setActiveSlideFileId(fileId);
+              setSelectedExplorerKind(fileId ? 'file' : 'note');
+            }}
             onGetStudyFileBase64={store.getStudyFileBase64}
             onToast={store.showToast}
             {...dragProps}
@@ -815,10 +877,16 @@ export default function App() {
             searchTriggerToken={searchTriggerToken}
             editorFontSize={store.editorFontSize}
             editorLineHeight={store.editorLineHeight}
-            onSelectNote={store.openNote}
+            onSelectNote={(noteId) => {
+              store.openNote(noteId);
+              setSelectedExplorerKind('note');
+            }}
             onCloseTab={store.closeTab}
             onReorderTabs={store.reorderTabs}
-            onCreateNote={() => void store.createNote(null)}
+            onCreateNote={() => {
+              setSelectedExplorerKind('note');
+              void store.createNote(null);
+            }}
             onChangeContent={store.updateNoteContent}
             onAskAiSelection={(text) => setAskSelectionState({ open: true, text })}
             onExplainSelection={(text) =>
@@ -1254,7 +1322,14 @@ export default function App() {
                                     onDrop={() => {
                                       clearHoverTabTimer();
                                     }}
-                                    onClick={() => store.setActiveColumnTab(col.colIndex, tabId)}
+                                    onClick={() => {
+                                      store.setActiveColumnTab(col.colIndex, tabId);
+                                      if (tabId === 'left-panel') {
+                                        setSelectedExplorerKind('note');
+                                      } else if (tabId === 'pdf-viewer-panel' && activeSlideFileId) {
+                                        setSelectedExplorerKind('file');
+                                      }
+                                    }}
                                     style={
                                       isActive ? { borderTopColor: 'var(--primary-500)' } : undefined
                                     }
@@ -1358,8 +1433,8 @@ export default function App() {
                                   <div
                                     role="separator"
                                     aria-orientation="horizontal"
-                                    onMouseDown={(e) => startVerticalResizing(e, col, pIdx)}
-                                    className="h-1 bg-slate-200 dark:bg-vscode-border accent-resizer cursor-row-resize flex-none transition-colors z-10"
+                                    onPointerDown={(e) => startVerticalResizing(e, col, pIdx)}
+                                    className="relative h-1 bg-slate-200 dark:bg-vscode-border accent-resizer cursor-row-resize flex-none transition-colors z-10 touch-none after:content-[''] after:absolute after:-inset-y-1 after:inset-x-0"
                                   />
                                 )}
                               </React.Fragment>
@@ -1411,8 +1486,8 @@ export default function App() {
                           setDraggedPanelId(null);
                           setDragDropTarget(null);
                         }}
-                        onMouseDown={(e) => startResizing(e, pos, pos + 1)}
-                        className="w-1 bg-slate-200 dark:bg-vscode-border accent-resizer cursor-col-resize flex-none transition-colors z-10"
+                        onPointerDown={(e) => startResizing(e, pos, pos + 1)}
+                        className="relative w-1 bg-slate-200 dark:bg-vscode-border accent-resizer cursor-col-resize flex-none transition-colors z-10 touch-none after:content-[''] after:absolute after:-inset-x-1 after:inset-y-0"
                       />
                     )}
                   </React.Fragment>

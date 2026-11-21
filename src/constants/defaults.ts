@@ -10,6 +10,8 @@ import type {
   WindowId,
 } from '../types';
 
+export const APP_VERSION = 'v1.0.4';
+
 export interface WindowConfigMeta {
   id: WindowId;
   label: string;

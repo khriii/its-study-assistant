@@ -173,6 +173,24 @@ function timestampToMillis(ts: unknown): number {
   return 0;
 }
 
+const utf8Encoder = new TextEncoder();
+
+function truncateUtf8(str: string, maxBytes: number): string {
+  if (!str) return '';
+  if (utf8Encoder.encode(str).length <= maxBytes) return str;
+  let low = 0;
+  let high = str.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (utf8Encoder.encode(str.slice(0, mid)).length <= maxBytes) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return str.slice(0, low);
+}
+
 export function useWorkspaceStore() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
@@ -244,6 +262,7 @@ export function useWorkspaceStore() {
   const bootstrapDoneRef = useRef<string | null>(null);
   const noteSaveTimerRef = useRef<number | null>(null);
   const pendingSaveNoteIdRef = useRef<string | null>(null);
+  const pendingSavePayloadRef = useRef<{ noteId: string; content: string } | null>(null);
   const studyFileCacheRef = useRef<Map<string, string>>(new Map());
   const decisionTokenProcessedRef = useRef<boolean>(false);
 
@@ -579,7 +598,7 @@ export function useWorkspaceStore() {
           Number.isFinite(data.defaultFlashcardCount)
         ) {
           setDefaultFlashcardCountState(
-            Math.max(3, Math.min(10, Math.round(data.defaultFlashcardCount))),
+            Math.max(1, Math.min(10, Math.round(data.defaultFlashcardCount))),
           );
         }
         if (typeof data.defaultQuizCount === 'number' && Number.isFinite(data.defaultQuizCount)) {
@@ -877,10 +896,54 @@ export function useWorkspaceStore() {
     }
   }, [showToast]);
 
+  const flushPendingNoteSave = useCallback(async () => {
+    if (noteSaveTimerRef.current) {
+      window.clearTimeout(noteSaveTimerRef.current);
+      noteSaveTimerRef.current = null;
+    }
+    const payload = pendingSavePayloadRef.current;
+    pendingSavePayloadRef.current = null;
+    pendingSaveNoteIdRef.current = null;
+    if (!payload || !user) return;
+    try {
+      await updateDoc(doc(db, 'users', user.uid, 'notes', payload.noteId), {
+        content: payload.content,
+        updatedAt: serverTimestamp(),
+      });
+      setSaveStatus('Salvato');
+    } catch (err) {
+      handleFirestoreError(
+        err,
+        OperationType.UPDATE,
+        `users/${user.uid}/notes/${payload.noteId}`,
+      );
+    }
+  }, [user]);
+
+  useEffect(() => {
+    const handleVisibilityOrUnload = () => {
+      if (pendingSavePayloadRef.current) {
+        void flushPendingNoteSave();
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        handleVisibilityOrUnload();
+      }
+    };
+    window.addEventListener('beforeunload', handleVisibilityOrUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('beforeunload', handleVisibilityOrUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [flushPendingNoteSave]);
+
   const logout = useCallback(async () => {
+    await flushPendingNoteSave();
     await signOut(auth);
     showToast('Disconnessione completata.', 'info');
-  }, [showToast]);
+  }, [flushPendingNoteSave, showToast]);
 
   // Preferences setters
   const setThemeMode = useCallback(
@@ -904,7 +967,7 @@ export function useWorkspaceStore() {
       editorLineHeight: number;
       windowHeaderLabelMode: WindowHeaderLabelMode;
     }) => {
-      const fcCount = Math.max(3, Math.min(10, Math.round(next.defaultFlashcardCount)));
+      const fcCount = Math.max(1, Math.min(10, Math.round(next.defaultFlashcardCount)));
       const qCount = Math.max(1, Math.min(20, Math.round(next.defaultQuizCount)));
       const fontSz = Math.max(13, Math.min(18, Math.round(next.editorFontSize)));
       const lineH = Math.max(1.2, Math.min(2.4, Math.round(next.editorLineHeight * 100) / 100));
@@ -1138,12 +1201,14 @@ export function useWorkspaceStore() {
 
       if (
         pendingSaveNoteIdRef.current &&
-        notes.some((n) => n.id === pendingSaveNoteIdRef.current && n.subjectId === subjectId) &&
-        noteSaveTimerRef.current
+        notes.some((n) => n.id === pendingSaveNoteIdRef.current && n.subjectId === subjectId)
       ) {
-        window.clearTimeout(noteSaveTimerRef.current);
-        noteSaveTimerRef.current = null;
+        if (noteSaveTimerRef.current) {
+          window.clearTimeout(noteSaveTimerRef.current);
+          noteSaveTimerRef.current = null;
+        }
         pendingSaveNoteIdRef.current = null;
+        pendingSavePayloadRef.current = null;
         setSaveStatus('Salvato');
       }
 
@@ -1276,30 +1341,21 @@ export function useWorkspaceStore() {
   const updateNoteContent = useCallback(
     (noteId: string, contentHtml: string) => {
       if (!user) return;
+      const trimmedContent = truncateUtf8(contentHtml, 448000);
       setSaveStatus('Salvataggio...');
       setNotes((prev) =>
-        prev.map((n) => (n.id === noteId ? { ...n, content: contentHtml } : n)),
+        prev.map((n) => (n.id === noteId ? { ...n, content: trimmedContent } : n)),
       );
       if (noteSaveTimerRef.current) {
         window.clearTimeout(noteSaveTimerRef.current);
       }
       pendingSaveNoteIdRef.current = noteId;
-      const trimmedContent = contentHtml.slice(0, 450000);
-      noteSaveTimerRef.current = window.setTimeout(async () => {
-        noteSaveTimerRef.current = null;
-        pendingSaveNoteIdRef.current = null;
-        try {
-          await updateDoc(doc(db, 'users', user.uid, 'notes', noteId), {
-            content: trimmedContent,
-            updatedAt: serverTimestamp(),
-          });
-          setSaveStatus('Salvato');
-        } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/notes/${noteId}`);
-        }
+      pendingSavePayloadRef.current = { noteId, content: trimmedContent };
+      noteSaveTimerRef.current = window.setTimeout(() => {
+        void flushPendingNoteSave();
       }, 400);
     },
-    [user],
+    [user, flushPendingNoteSave],
   );
 
   const renameNote = useCallback(
@@ -1325,10 +1381,13 @@ export function useWorkspaceStore() {
       const target = notes.find((n) => n.id === noteId);
       if (!target) return;
 
-      if (pendingSaveNoteIdRef.current === noteId && noteSaveTimerRef.current) {
-        window.clearTimeout(noteSaveTimerRef.current);
-        noteSaveTimerRef.current = null;
+      if (pendingSaveNoteIdRef.current === noteId) {
+        if (noteSaveTimerRef.current) {
+          window.clearTimeout(noteSaveTimerRef.current);
+          noteSaveTimerRef.current = null;
+        }
         pendingSaveNoteIdRef.current = null;
+        pendingSavePayloadRef.current = null;
         setSaveStatus('Salvato');
       }
 
@@ -1508,11 +1567,16 @@ export function useWorkspaceStore() {
         return null;
       }
 
+      let buffer: ArrayBuffer;
+      let base64: string;
+      let chunks: string[];
+      let extractedText = '';
+
       try {
-        const buffer = await file.arrayBuffer();
-        const base64 = arrayBufferToBase64(buffer);
+        buffer = await file.arrayBuffer();
+        base64 = arrayBufferToBase64(buffer);
         const CHUNK_LEN = 500000;
-        const chunks: string[] = [];
+        chunks = [];
         for (let i = 0; i < base64.length; i += CHUNK_LEN) {
           chunks.push(base64.slice(i, i + CHUNK_LEN));
         }
@@ -1521,13 +1585,21 @@ export function useWorkspaceStore() {
           showToast(`Il file "${file.name}" è troppo grande per il salvataggio.`, 'error');
           return null;
         }
+      } catch {
+        showToast(`Impossibile leggere il file "${file.name}".`, 'error');
+        return null;
+      }
 
-        let extractedText = '';
-        if (ext === 'docx' || ext === 'pptx') {
+      if (ext === 'docx' || ext === 'pptx') {
+        try {
           const parsed = await extractDocumentPreview(buffer, ext);
           extractedText = parsed.extractedText;
+        } catch {
+          extractedText = '';
         }
+      }
 
+      try {
         const fileId = makeSafeId('sfile');
         const mimeType = getMimeTypeForExt(ext, file.type);
         const batch = writeBatch(db);
@@ -1537,12 +1609,12 @@ export function useWorkspaceStore() {
           userId: user.uid,
           subjectId: currentSubject.id,
           folderId,
-          name: file.name.trim().slice(0, 180),
-          mimeType: mimeType.slice(0, 160),
+          name: file.name.trim().slice(0, 180) || `documento.${ext}`,
+          mimeType: (mimeType || 'application/octet-stream').slice(0, 160),
           fileExt: ext,
-          size: Math.round(file.size),
+          size: Math.max(0, Math.round(file.size)),
           totalChunks: chunks.length,
-          extractedText: extractedText.slice(0, 200000),
+          extractedText: truncateUtf8(extractedText, 195000),
           order: subjectStudyFiles.length,
         };
 
@@ -1847,6 +1919,7 @@ export function useWorkspaceStore() {
   // JSON Backup Export & Import (Supports Cloud v5 with StudyFiles/Quizzes & Legacy HTML v4 format!)
   const exportFullBackupJson = useCallback(async () => {
     try {
+      await flushPendingNoteSave();
       const legacySubjects = subjects.map((s) => s.name);
       const subjectConfig: Record<string, { color: string; prompt: string }> = {};
       const subjectNameById = new Map<string, string>();
@@ -1954,6 +2027,7 @@ export function useWorkspaceStore() {
       showToast("Errore durante l'esportazione del backup JSON.", 'error');
     }
   }, [
+    flushPendingNoteSave,
     subjects,
     folders,
     notes,
@@ -2098,7 +2172,7 @@ export function useWorkspaceStore() {
             subjectId: subId,
             folderId: mappedFolderId,
             title: (String(n.title || '').trim() || 'Nota importata').slice(0, 160),
-            content: String(n.content || '').slice(0, 450000),
+            content: truncateUtf8(String(n.content || ''), 448000),
             order: noteOrder,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -2336,7 +2410,7 @@ export function useWorkspaceStore() {
           typeof rawData.defaultFlashcardCount === 'number' &&
           Number.isFinite(rawData.defaultFlashcardCount)
         ) {
-          const fc = Math.max(3, Math.min(10, Math.round(rawData.defaultFlashcardCount)));
+          const fc = Math.max(1, Math.min(10, Math.round(rawData.defaultFlashcardCount)));
           prefUpdate.defaultFlashcardCount = fc;
           setDefaultFlashcardCountState(fc);
         }
